@@ -54,7 +54,7 @@ func SaveToDB(db *sql.DB, data insights.Data) error {
 		return err
 	}
 
-	query := `INSERT INTO models (id, time, data) VALUES (?, ?, ?)`
+	query := `INSERT INTO insights (id, time, data) VALUES (?, ?, ?)`
 	_, err = db.Exec(query, data.InsightsID, time.Now(), dataJSON)
 	return err
 }

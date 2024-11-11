@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 golang:1.23 AS build
+FROM  golang:1.23 AS build
 
 WORKDIR /workspace
 RUN --mount=type=bind,source=. \
@@ -13,7 +13,10 @@ RUN --mount=type=bind,source=. \
     --mount=type=cache,target=/go/pkg/mod \
     go build -o /insights
 
-FROM --platform=linux/amd64 debian:bookworm AS final
+FROM scratch AS binary
+COPY --from=build /insights /insights
+
+FROM debian:bookworm AS final
 COPY --from=build /insights /insights
 WORKDIR /app
 CMD ["/insights"]

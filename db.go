@@ -34,11 +34,12 @@ func OpenDB(fileName string) (*sql.DB, error) {
 
 	// Create table if not exists
 	createTableQuery := `
-	CREATE TABLE IF NOT EXISTS insights (
-		id TEXT PRIMARY KEY,
-		time DATETIME,
-		data JSONB
-	);`
+CREATE TABLE IF NOT EXISTS insights (
+	id VARCHAR NOT NULL,
+	time DATETIME default CURRENT_TIMESTAMP,
+	data JSONB,
+	PRIMARY KEY (id, time)
+);`
 	_, err = db.Exec(createTableQuery)
 	if err != nil {
 		return nil, err
@@ -54,7 +55,7 @@ func SaveToDB(db *sql.DB, data insights.Data) error {
 		return err
 	}
 
-	query := `INSERT INTO insights (id, time, data) VALUES (?, ?, ?)`
-	_, err = db.Exec(query, data.InsightsID, time.Now(), dataJSON)
+	query := `INSERT INTO insights (id, data) VALUES (?, ?)`
+	_, err = db.Exec(query, data.InsightsID, dataJSON)
 	return err
 }

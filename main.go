@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,6 +24,10 @@ func main() {
 	r.Use(limiter.Handler)
 	r.Post("/collect", handler(db))
 
-	log.Print("Starting Insights server on :8080")
-	http.ListenAndServe(":8080", r)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	log.Print("Starting Insights server on :" + port)
+	http.ListenAndServe(":"+port, r)
 }

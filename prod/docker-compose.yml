@@ -1,6 +1,6 @@
 services:
   insights:
-    build: .
+    image: ghcr.io/navidrome/insights:main
     restart: unless-stopped
     expose:
       - "8080"

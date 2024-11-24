@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"time"
 
@@ -11,13 +12,7 @@ import (
 	"github.com/navidrome/navidrome/core/metrics/insights"
 )
 
-type DBModel struct {
-	ID   string
-	Time time.Time
-	insights.Data
-}
-
-func OpenDB(fileName string) (*sql.DB, error) {
+func openDB(fileName string) (*sql.DB, error) {
 	params := url.Values{
 		"_journal_mode": []string{"WAL"},
 		"_synchronous":  []string{"NORMAL"},
@@ -49,7 +44,7 @@ CREATE TABLE IF NOT EXISTS insights (
 	return db, nil
 }
 
-func SaveToDB(db *sql.DB, data insights.Data) error {
+func saveToDB(db *sql.DB, data insights.Data) error {
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
 		return err
@@ -58,4 +53,16 @@ func SaveToDB(db *sql.DB, data insights.Data) error {
 	query := `INSERT INTO insights (id, data) VALUES (?, ?)`
 	_, err = db.Exec(query, data.InsightsID, dataJSON)
 	return err
+}
+
+func purgeOldEntries(db *sql.DB) error {
+	// Delete entries older than 30 days
+	query := `DELETE FROM insights WHERE time < ?`
+	cnt, err := db.Exec(query, time.Now().Add(-30*24*time.Hour))
+	if err != nil {
+		return err
+	}
+	deleted, _ := cnt.RowsAffected()
+	log.Printf("Deleted %d old entries\n", deleted)
+	return nil
 }

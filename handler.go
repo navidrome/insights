@@ -25,7 +25,7 @@ func handler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		err = SaveToDB(db, data)
+		err = saveToDB(db, data)
 		if err != nil {
 			log.Printf("Error handling request: %s", err.Error())
 			w.WriteHeader(http.StatusInternalServerError)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
@@ -11,11 +12,21 @@ import (
 	"github.com/go-chi/httprate"
 )
 
+func dataCleaner(db *sql.DB) {
+	for {
+		log.Print("Cleaning old data")
+		_ = purgeOldEntries(db)
+		time.Sleep(24 * time.Hour)
+	}
+}
+
 func main() {
-	db, err := OpenDB("insights.db")
+	db, err := openDB("insights.db")
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	go dataCleaner(db)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)

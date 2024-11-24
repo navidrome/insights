@@ -12,16 +12,17 @@ import (
 )
 
 func main() {
-	r := chi.NewRouter()
-	r.Use(middleware.Logger)
 
 	db, err := OpenDB("insights.db")
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	limiter := httprate.NewRateLimiter(1, 30*time.Minute, httprate.WithKeyByIP())
 	r.Use(limiter.Handler)
+	r.Use(middleware.RealIP)
 	r.Post("/collect", handler(db))
 
 	port := os.Getenv("PORT")

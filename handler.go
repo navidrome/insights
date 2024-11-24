@@ -19,7 +19,7 @@ func handler(db *sql.DB) http.HandlerFunc {
 			if errors.As(err, &mr) {
 				http.Error(w, mr.msg, mr.status)
 			} else {
-				log.Print(err.Error())
+				log.Printf("error decoding payload: %s", err.Error())
 				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			}
 			return
@@ -27,8 +27,11 @@ func handler(db *sql.DB) http.HandlerFunc {
 
 		err = SaveToDB(db, data)
 		if err != nil {
-			log.Print(err.Error())
+			log.Printf("Error handling request: %s", err.Error())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
+
 		w.WriteHeader(http.StatusOK)
 	}
 }

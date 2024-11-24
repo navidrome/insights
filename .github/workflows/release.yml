@@ -1,4 +1,4 @@
-name: Release - Test, Build & Redeploy
+name: Release - Test, Build
 
 on:
   workflow_dispatch:
@@ -21,7 +21,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
 
   test:
-    name: Test - Unit & Integration
+    name: Test code
     runs-on: ubuntu-latest
 
     steps:

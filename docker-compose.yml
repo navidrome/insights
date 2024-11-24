@@ -1,7 +1,15 @@
 services:
   app:
-    build: .
-    ports:
-      - "8080:8080"
+    build:
+      context: docker/app
     volumes:
-      - .:/app
+      - ./:/workspace
+      - ./tmp/.go/pkg:/go/pkg
+      - ./tmp/.go-cache:/go-cache
+    working_dir: /workspace
+    env_file:
+      - .env
+    ports:
+      - "$PORT:$PORT"
+    environment:
+      GOCACHE: /go-cache

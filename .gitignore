@@ -1,2 +1,4 @@
 insights.db*
 insights
+.env
+tmp

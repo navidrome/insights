@@ -12,7 +12,6 @@ import (
 )
 
 func main() {
-
 	db, err := OpenDB("insights.db")
 	if err != nil {
 		log.Fatal(err)
@@ -27,8 +26,17 @@ func main() {
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "4578"
+		port = "8080"
 	}
+
 	log.Print("Starting Insights server on :" + port)
-	http.ListenAndServe(":"+port, r)
+	server := &http.Server{
+		Addr:              ":" + port,
+		ReadHeaderTimeout: 3 * time.Second,
+		Handler:           r,
+	}
+	err = server.ListenAndServe()
+	if err != nil {
+		log.Fatal("ListenAndServe: ", err)
+	}
 }

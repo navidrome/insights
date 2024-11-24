@@ -19,10 +19,10 @@ func main() {
 	}
 
 	r := chi.NewRouter()
+	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	limiter := httprate.NewRateLimiter(1, 30*time.Minute, httprate.WithKeyByIP())
 	r.Use(limiter.Handler)
-	r.Use(middleware.RealIP)
 	r.Post("/collect", handler(db))
 
 	port := os.Getenv("PORT")

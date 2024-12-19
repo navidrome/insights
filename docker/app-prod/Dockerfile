@@ -1,4 +1,4 @@
-FROM  golang:1.23 AS build
+FROM public.ecr.aws/docker/library/golang:1.23 AS build
 
 WORKDIR /workspace
 RUN --mount=type=bind,source=. \
@@ -16,7 +16,7 @@ RUN --mount=type=bind,source=. \
 FROM scratch AS binary
 COPY --from=build /insights /insights
 
-FROM debian:bookworm AS final
+FROM public.ecr.aws/docker/library/debian:bookworm AS final
 COPY --from=build /insights /insights
 WORKDIR /app
 CMD ["/insights"]

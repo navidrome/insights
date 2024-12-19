@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine
+FROM public.ecr.aws/docker/library/golang:1.23-alpine
 
 RUN apk add --update gcc g++
 RUN wget -O- https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b `go env GOPATH`/bin v1.62.0;

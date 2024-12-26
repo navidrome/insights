@@ -94,18 +94,19 @@ func mapPlayers(data insights.Data, players map[string]uint64) {
 }
 
 func selectData(db *sql.DB, date time.Time) (iter.Seq[insights.Data], error) {
-	query := fmt.Sprintf(`
+	query := `
 SELECT i1.id, i1.time, i1.data
 FROM insights i1
 INNER JOIN (
     SELECT id, MAX(time) as max_time
     FROM insights
-    WHERE time >= date('%[1]s', '-1 day') AND time < date('%[1]s')
+    WHERE time >= date(?, '-1 day') AND time < date(?)
     GROUP BY id
 ) i2 ON i1.id = i2.id AND i1.time = i2.max_time
-WHERE i1.time >= date('%[1]s', '-1 day') AND time < date('%[1]s')
-ORDER BY i1.id, i1.time DESC;`, date.Format("2006-01-02"))
-	rows, err := db.Query(query)
+WHERE i1.time >= date(?, '-1 day') AND time < date(?)
+ORDER BY i1.id, i1.time DESC;`
+	d := date.Format("2006-01-02")
+	rows, err := db.Query(query, d, d, d, d)
 	if err != nil {
 		return nil, fmt.Errorf("querying data: %w", err)
 	}

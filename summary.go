@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"log"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -16,12 +17,14 @@ import (
 )
 
 type Summary struct {
-	Versions    map[string]uint64 `json:"versions,omitempty"`
-	OS          map[string]uint64 `json:"OS,omitempty"`
-	PlayerTypes map[string]uint64 `json:"playerTypes,omitempty"`
-	Players     map[string]uint64 `json:"players,omitempty"`
-	Users       map[string]uint64 `json:"users,omitempty"`
-	Tracks      map[string]uint64 `json:"tracks,omitempty"`
+	Versions       map[string]uint64 `json:"versions,omitempty"`
+	OS             map[string]uint64 `json:"OS,omitempty"`
+	PlayerTypes    map[string]uint64 `json:"playerTypes,omitempty"`
+	Players        map[string]uint64 `json:"players,omitempty"`
+	Users          map[string]uint64 `json:"users,omitempty"`
+	Tracks         map[string]uint64 `json:"tracks,omitempty"`
+	LibSizeAverage int64             `json:"libSizeAverage,omitempty"`
+	LibSizeStdDev  float64           `json:"libSizeStdDev,omitempty"`
 }
 
 func summarizeData(db *sql.DB, date time.Time) error {
@@ -38,6 +41,9 @@ func summarizeData(db *sql.DB, date time.Time) error {
 		Users:       make(map[string]uint64),
 		Tracks:      make(map[string]uint64),
 	}
+	var numInstances int64
+	var sumTracks int64
+	var sumTracksSquared int64
 	for data := range rows {
 		// Summarize data here
 		summary.Versions[mapVersion(data)]++
@@ -46,6 +52,17 @@ func summarizeData(db *sql.DB, date time.Time) error {
 		totalPlayers := mapPlayerTypes(data, summary.PlayerTypes)
 		summary.Players[fmt.Sprintf("%d", totalPlayers)]++
 		mapToBins(data.Library.Tracks, trackBins, summary.Tracks)
+		if data.Library.Tracks > 0 {
+			sumTracks += data.Library.Tracks
+			sumTracksSquared += data.Library.Tracks * data.Library.Tracks
+			numInstances++
+		}
+	}
+	if numInstances > 0 {
+		summary.LibSizeAverage = sumTracks / numInstances
+		mean := float64(sumTracks) / float64(numInstances)
+		variance := float64(sumTracksSquared)/float64(numInstances) - mean*mean
+		summary.LibSizeStdDev = math.Sqrt(variance)
 	}
 	// Save summary to database
 	err = saveSummary(db, summary, date)
@@ -93,7 +110,7 @@ func mapOS(data insights.Data) string {
 var playersTypes = map[*regexp.Regexp]string{
 	regexp.MustCompile("NavidromeUI.*"):       "NavidromeUI",
 	regexp.MustCompile("supersonic"):          "Supersonic",
-	regexp.MustCompile("feishin_"):            "", // Discard (old version)
+	regexp.MustCompile("feishin"):             "", // Discard (old version reporting multiple times)
 	regexp.MustCompile("audioling"):           "Audioling",
 	regexp.MustCompile("playSub.*"):           "play:Sub",
 	regexp.MustCompile("eu.callcc.audrey"):    "audrey",
@@ -102,6 +119,7 @@ var playersTypes = map[*regexp.Regexp]string{
 	regexp.MustCompile("https?://airsonic.*"): "Airsonic Refix",
 	regexp.MustCompile("multi-scrobbler.*"):   "Multi-Scrobbler",
 	regexp.MustCompile("SubMusic.*"):          "SubMusic",
+	regexp.MustCompile("(?i)(hiby|_hiby_)"):   "HiBy",
 }
 
 func mapPlayerTypes(data insights.Data, players map[string]uint64) int64 {

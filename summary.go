@@ -23,6 +23,8 @@ type Summary struct {
 	Players        map[string]uint64 `json:"players,omitempty"`
 	Users          map[string]uint64 `json:"users,omitempty"`
 	Tracks         map[string]uint64 `json:"tracks,omitempty"`
+	MusicFS        map[string]uint64 `json:"musicFS,omitempty"`
+	DataFS         map[string]uint64 `json:"dataFS,omitempty"`
 	LibSizeAverage int64             `json:"libSizeAverage,omitempty"`
 	LibSizeStdDev  float64           `json:"libSizeStdDev,omitempty"`
 }
@@ -40,6 +42,8 @@ func summarizeData(db *sql.DB, date time.Time) error {
 		Players:     make(map[string]uint64),
 		Users:       make(map[string]uint64),
 		Tracks:      make(map[string]uint64),
+		MusicFS:     make(map[string]uint64),
+		DataFS:      make(map[string]uint64),
 	}
 	var numInstances int64
 	var sumTracks int64
@@ -49,6 +53,8 @@ func summarizeData(db *sql.DB, date time.Time) error {
 		summary.Versions[mapVersion(data)]++
 		summary.OS[mapOS(data)]++
 		summary.Users[fmt.Sprintf("%d", data.Library.ActiveUsers)]++
+		summary.MusicFS[mapFS(data.FS.Music)]++
+		summary.DataFS[mapFS(data.FS.Data)]++
 		totalPlayers := mapPlayerTypes(data, summary.PlayerTypes)
 		summary.Players[fmt.Sprintf("%d", totalPlayers)]++
 		mapToBins(data.Library.Tracks, trackBins, summary.Tracks)
@@ -142,6 +148,26 @@ func mapPlayerTypes(data insights.Data, players map[string]uint64) int64 {
 		players[k] += v
 	}
 	return total
+}
+
+var fsMappings = map[string]string{
+	"unknown(0x2011bab0)": "exfat",
+	"unknown(0x7366746e)": "ntfs",
+	"unknown(0xc36400)":   "ceph",
+	"unknown(0xf15f)":     "ecryptfs",
+	"unknown(0xff534d42)": "cifs",
+	"unknown(0x786f4256)": "vboxsf",
+	"unknown(0xf2f52010)": "f2fs",
+}
+
+func mapFS(fs *insights.FSInfo) string {
+	if fs == nil {
+		return "unknown"
+	}
+	if t, ok := fsMappings[fs.Type]; ok {
+		return t
+	}
+	return fs.Type
 }
 
 func selectData(db *sql.DB, date time.Time) (iter.Seq[insights.Data], error) {

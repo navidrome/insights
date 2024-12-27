@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,11 +16,12 @@ import (
 )
 
 type Summary struct {
-	Versions map[string]uint64
-	OS       map[string]uint64
-	Players  map[string]uint64
-	Users    map[string]uint64
-	Tracks   map[string]uint64
+	Versions    map[string]uint64 `json:"versions,omitempty"`
+	OS          map[string]uint64 `json:"OS,omitempty"`
+	PlayerTypes map[string]uint64 `json:"playerTypes,omitempty"`
+	Players     map[string]uint64 `json:"players,omitempty"`
+	Users       map[string]uint64 `json:"users,omitempty"`
+	Tracks      map[string]uint64 `json:"tracks,omitempty"`
 }
 
 func summarizeData(db *sql.DB, date time.Time) error {
@@ -29,18 +31,20 @@ func summarizeData(db *sql.DB, date time.Time) error {
 		return err
 	}
 	summary := Summary{
-		Versions: make(map[string]uint64),
-		OS:       make(map[string]uint64),
-		Players:  make(map[string]uint64),
-		Users:    make(map[string]uint64),
-		Tracks:   make(map[string]uint64),
+		Versions:    make(map[string]uint64),
+		OS:          make(map[string]uint64),
+		PlayerTypes: make(map[string]uint64),
+		Players:     make(map[string]uint64),
+		Users:       make(map[string]uint64),
+		Tracks:      make(map[string]uint64),
 	}
 	for data := range rows {
 		// Summarize data here
 		summary.Versions[mapVersion(data)]++
 		summary.OS[mapOS(data)]++
-		mapPlayers(data, summary.Players)
-		mapToBins(data.Library.ActiveUsers, userBins, summary.Users)
+		summary.Users[fmt.Sprintf("%d", data.Library.ActiveUsers)]++
+		totalPlayers := mapPlayerTypes(data, summary.PlayerTypes)
+		summary.Players[fmt.Sprintf("%d", totalPlayers)]++
 		mapToBins(data.Library.Tracks, trackBins, summary.Tracks)
 	}
 	// Save summary to database
@@ -55,7 +59,6 @@ func summarizeData(db *sql.DB, date time.Time) error {
 func mapVersion(data insights.Data) string { return data.Version }
 
 var trackBins = []int64{0, 1, 100, 500, 1000, 5000, 10000, 20000, 50000, 100000, 500000, 1000000}
-var userBins = []int64{0, 1, 5, 10, 20, 50, 100, 200, 500, 1000}
 
 func mapToBins(count int64, bins []int64, counters map[string]uint64) {
 	for i := range bins {
@@ -80,17 +83,47 @@ func mapOS(data insights.Data) string {
 			}
 			return "Linux"
 		default:
-			s := strings.Replace(data.OS.Type, "bsd", "BSD", -1)
-			return caser.String(s)
+			s := caser.String(data.OS.Type)
+			return strings.Replace(s, "bsd", "BSD", -1)
 		}
 	}()
 	return os + " - " + data.OS.Arch
 }
 
-func mapPlayers(data insights.Data, players map[string]uint64) {
+var playersTypes = map[*regexp.Regexp]string{
+	regexp.MustCompile("NavidromeUI.*"):       "NavidromeUI",
+	regexp.MustCompile("supersonic"):          "Supersonic",
+	regexp.MustCompile("feishin_"):            "", // Discard (old version)
+	regexp.MustCompile("audioling"):           "Audioling",
+	regexp.MustCompile("playSub.*"):           "play:Sub",
+	regexp.MustCompile("eu.callcc.audrey"):    "audrey",
+	regexp.MustCompile("DSubCC"):              "", // Discard (chromecast)
+	regexp.MustCompile(`bonob\+.*`):           "", // Discard (transcodings)
+	regexp.MustCompile("https?://airsonic.*"): "Airsonic Refix",
+	regexp.MustCompile("multi-scrobbler.*"):   "Multi-Scrobbler",
+	regexp.MustCompile("SubMusic.*"):          "SubMusic",
+}
+
+func mapPlayerTypes(data insights.Data, players map[string]uint64) int64 {
+	seen := map[string]uint64{}
 	for p, count := range data.Library.ActivePlayers {
-		players[p] = uint64(count)
+		for r, t := range playersTypes {
+			if r.MatchString(p) {
+				p = t
+				break
+			}
+		}
+		if p != "" {
+			v := seen[p]
+			seen[p] = max(v, uint64(count))
+		}
 	}
+	var total int64
+	for k, v := range seen {
+		total += int64(v)
+		players[k] += v
+	}
+	return total
 }
 
 func selectData(db *sql.DB, date time.Time) (iter.Seq[insights.Data], error) {
@@ -100,10 +133,10 @@ FROM insights i1
 INNER JOIN (
     SELECT id, MAX(time) as max_time
     FROM insights
-    WHERE time >= date(?, '-1 day') AND time < date(?)
+    WHERE time >= date(?) AND time < date(?, '+1 day')
     GROUP BY id
 ) i2 ON i1.id = i2.id AND i1.time = i2.max_time
-WHERE i1.time >= date(?, '-1 day') AND time < date(?)
+WHERE i1.time >= date(?) AND time < date(?, '+1 day')
 ORDER BY i1.id, i1.time DESC;`
 	d := date.Format("2006-01-02")
 	rows, err := db.Query(query, d, d, d, d)

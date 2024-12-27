@@ -27,14 +27,21 @@ func openDB(fileName string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	// Create table if not exists
+	// Create schema if not exists
 	createTableQuery := `
 CREATE TABLE IF NOT EXISTS insights (
 	id VARCHAR NOT NULL,
 	time DATETIME default CURRENT_TIMESTAMP,
 	data JSONB,
 	PRIMARY KEY (id, time)
-);`
+);
+CREATE TABLE IF NOT EXISTS summary (
+    id   INTEGER   PRIMARY KEY AUTOINCREMENT,
+    time DATETIME UNIQUE,
+    data JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_summary_time ON summary (time);
+`
 	_, err = db.Exec(createTableQuery)
 	if err != nil {
 		return nil, err
@@ -44,14 +51,25 @@ CREATE TABLE IF NOT EXISTS insights (
 	return db, nil
 }
 
-func saveToDB(db *sql.DB, data insights.Data) error {
+func saveReport(db *sql.DB, data insights.Data, t time.Time) error {
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
 
-	query := `INSERT INTO insights (id, data) VALUES (?, ?)`
-	_, err = db.Exec(query, data.InsightsID, dataJSON)
+	query := `INSERT INTO insights (id, data, time) VALUES (?, ?, ?)`
+	_, err = db.Exec(query, data.InsightsID, dataJSON, t.Format("2006-01-02 15:04:05"))
+	return err
+}
+
+func saveSummary(db *sql.DB, summary Summary, t time.Time) error {
+	summaryJSON, err := json.Marshal(summary)
+	if err != nil {
+		return err
+	}
+
+	query := `INSERT INTO summary (time, data) VALUES (?, ?) ON CONFLICT(time) DO UPDATE SET data=?`
+	_, err = db.Exec(query, t.Format("2006-01-02 15:04:05"), summaryJSON, summaryJSON)
 	return err
 }
 

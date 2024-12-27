@@ -16,7 +16,7 @@ import (
 
 func startTasks(ctx context.Context, db *sql.DB) error {
 	c := cron.New()
-	_, err := c.AddFunc("1 0 * * *", summarize(ctx, db))
+	_, err := c.AddFunc("1 * * * *", summarize(ctx, db))
 	if err != nil {
 		return err
 	}
@@ -38,6 +38,8 @@ func main() {
 	if err := startTasks(ctx, db); err != nil {
 		log.Fatal(err)
 	}
+
+	summarize(ctx, db)()
 
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)

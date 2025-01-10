@@ -17,8 +17,11 @@ import (
 )
 
 type Summary struct {
+	NumInstances   int64             `json:"numInstances,omitempty"`
+	NumActiveUsers int64             `json:"numActiveUsers,omitempty"`
 	Versions       map[string]uint64 `json:"versions,omitempty"`
-	OS             map[string]uint64 `json:"OS,omitempty"`
+	OS             map[string]uint64 `json:"os,omitempty"`
+	Distros        map[string]uint64 `json:"distros,omitempty"`
 	PlayerTypes    map[string]uint64 `json:"playerTypes,omitempty"`
 	Players        map[string]uint64 `json:"players,omitempty"`
 	Users          map[string]uint64 `json:"users,omitempty"`
@@ -38,6 +41,7 @@ func summarizeData(db *sql.DB, date time.Time) error {
 	summary := Summary{
 		Versions:    make(map[string]uint64),
 		OS:          make(map[string]uint64),
+		Distros:     make(map[string]uint64),
 		PlayerTypes: make(map[string]uint64),
 		Players:     make(map[string]uint64),
 		Users:       make(map[string]uint64),
@@ -50,8 +54,13 @@ func summarizeData(db *sql.DB, date time.Time) error {
 	var sumTracksSquared int64
 	for data := range rows {
 		// Summarize data here
+		summary.NumInstances++
+		summary.NumActiveUsers += data.Library.ActiveUsers
 		summary.Versions[mapVersion(data)]++
 		summary.OS[mapOS(data)]++
+		if data.OS.Type == "linux" && !data.OS.Containerized {
+			summary.Distros[data.OS.Distro]++
+		}
 		summary.Users[fmt.Sprintf("%d", data.Library.ActiveUsers)]++
 		summary.MusicFS[mapFS(data.FS.Music)]++
 		summary.DataFS[mapFS(data.FS.Data)]++
@@ -64,12 +73,15 @@ func summarizeData(db *sql.DB, date time.Time) error {
 			numInstances++
 		}
 	}
-	if numInstances > 0 {
-		summary.LibSizeAverage = sumTracks / numInstances
-		mean := float64(sumTracks) / float64(numInstances)
-		variance := float64(sumTracksSquared)/float64(numInstances) - mean*mean
-		summary.LibSizeStdDev = math.Sqrt(variance)
+	if numInstances == 0 {
+		log.Printf("No data to summarize for %s", date.Format("2006-01-02"))
+		return nil
 	}
+	summary.LibSizeAverage = sumTracks / numInstances
+	mean := float64(sumTracks) / float64(numInstances)
+	variance := float64(sumTracksSquared)/float64(numInstances) - mean*mean
+	summary.LibSizeStdDev = math.Sqrt(variance)
+
 	// Save summary to database
 	err = saveSummary(db, summary, date)
 	if err != nil {
@@ -79,7 +91,12 @@ func summarizeData(db *sql.DB, date time.Time) error {
 	return err
 }
 
-func mapVersion(data insights.Data) string { return data.Version }
+// Match the first 8 characters of a git sha
+var versionRegex = regexp.MustCompile(`\(([0-9a-fA-F]{8})[0-9a-fA-F]*\)`)
+
+func mapVersion(data insights.Data) string {
+	return versionRegex.ReplaceAllString(data.Version, "($1)")
+}
 
 var trackBins = []int64{0, 1, 100, 500, 1000, 5000, 10000, 20000, 50000, 100000, 500000, 1000000}
 
@@ -118,6 +135,7 @@ var playersTypes = map[*regexp.Regexp]string{
 	regexp.MustCompile("supersonic"):          "Supersonic",
 	regexp.MustCompile("feishin"):             "", // Discard (old version reporting multiple times)
 	regexp.MustCompile("audioling"):           "Audioling",
+	regexp.MustCompile("^AginMusic.*"):        "AginMusic",
 	regexp.MustCompile("playSub.*"):           "play:Sub",
 	regexp.MustCompile("eu.callcc.audrey"):    "audrey",
 	regexp.MustCompile("DSubCC"):              "", // Discard (chromecast)
@@ -167,7 +185,7 @@ func mapFS(fs *insights.FSInfo) string {
 	if t, ok := fsMappings[fs.Type]; ok {
 		return t
 	}
-	return fs.Type
+	return strings.ToLower(fs.Type)
 }
 
 func selectData(db *sql.DB, date time.Time) (iter.Seq[insights.Data], error) {

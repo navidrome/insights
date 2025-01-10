@@ -144,6 +144,7 @@ var playersTypes = map[*regexp.Regexp]string{
 	regexp.MustCompile("multi-scrobbler.*"):   "Multi-Scrobbler",
 	regexp.MustCompile("SubMusic.*"):          "SubMusic",
 	regexp.MustCompile("(?i)(hiby|_hiby_)"):   "HiBy",
+	regexp.MustCompile("microSub"):            "AVSub",
 }
 
 func mapPlayerTypes(data insights.Data, players map[string]uint64) int64 {

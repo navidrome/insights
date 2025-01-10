@@ -58,6 +58,17 @@ var _ = Describe("Summary", func() {
 		})
 	})
 
+	DescribeTable("mapVersion",
+		func(expected string, data insights.Data) {
+			Expect(mapVersion(data)).To(Equal(expected))
+		},
+		Entry("should map version", "0.54.2 (0b184893)", insights.Data{Version: "0.54.2 (0b184893)"}),
+		Entry("should map version with long hash", "0.54.2 (0b184893)", insights.Data{Version: "0.54.2 (0b184893278620bb421a85c8b47df36900cd4df7)"}),
+		Entry("should map version with no hash", "dev", insights.Data{Version: "dev"}),
+		Entry("should map version with other values", "0.54.3 (source_archive)", insights.Data{Version: "0.54.3 (source_archive)"}),
+		Entry("should map any version with a hash", "0.54.3-SNAPSHOT (734eb30a)", insights.Data{Version: "0.54.3-SNAPSHOT (734eb30a)"}),
+	)
+
 	DescribeTable("mapOS",
 		func(expected string, data insights.Data) {
 			Expect(mapOS(data)).To(Equal(expected))

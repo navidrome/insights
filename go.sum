@@ -6,7 +6,7 @@ github.com/go-chi/httprate v0.14.1 h1:EKZHYEZ58Cg6hWcYzoZILsv7ppb46Wt4uQ738IRtpZ
 github.com/go-chi/httprate v0.14.1/go.mod h1:TUepLXaz/pCjmCtf/obgOQJ2Sz6rC8fSf5cAt5cnTt0=
 github.com/mattn/go-sqlite3 v1.14.24 h1:tpSp2G2KyMnnQu99ngJ47EIkWVmliIizyZBfPrBWDRM=
 github.com/mattn/go-sqlite3 v1.14.24/go.mod h1:Uh1q+B4BYcTPb+yiD3kU8Ct7aC0hY9fxUwlHK0RXw+Y=
-github.com/navidrome/navidrome v0.53.4-0.20241219230533-906ac635c296 h1:xVDyE7lmkEUSNfz9vWHYueY35Ao/QxJEAFnGghOWtLA=
-github.com/navidrome/navidrome v0.53.4-0.20241219230533-906ac635c296/go.mod h1:4uSM4pHPlsvdjVkjb9C98nLK38t3ph+zz1zjOCSKd4I=
+github.com/navidrome/navidrome v0.54.4 h1:qLUbcNAGwDkLX2fpeS55qhJ74AzNIHdt8ANVF+ilrds=
+github.com/navidrome/navidrome v0.54.4/go.mod h1:zdo73zbb7g71qKOyTiZ7qINzJccBlzmB05ASRSmHXBE=
 golang.org/x/sync v0.10.0 h1:3NQrjDixjgGwUOCaF8w2+VYHv0Ve/vGYSbdkTa98gmQ=
 golang.org/x/sync v0.10.0/go.mod h1:Czt+wKu1gCyEFDUtn0jG5QVvpJ6rzVqr5aXyt9drQfk=

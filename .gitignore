@@ -3,3 +3,4 @@ insights.db*
 insights
 .env
 tmp
+charts

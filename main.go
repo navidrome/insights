@@ -45,9 +45,9 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
+	r.Handle("/charts/*", http.StripPrefix("/charts/", http.FileServer(http.Dir("./charts"))))
 	limiter := httprate.NewRateLimiter(1, 30*time.Minute, httprate.WithKeyByIP())
-	r.Use(limiter.Handler)
-	r.Post("/collect", handler(db))
+	r.With(limiter.Handler).Post("/collect", handler(db))
 
 	port := os.Getenv("PORT")
 	if port == "" {

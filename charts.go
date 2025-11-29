@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -71,8 +72,13 @@ func buildVersionsChart(summaries []SummaryRecord) *charts.Line {
 	// Get top N versions by total count
 	topVersionsList := getTopKeys(versionTotals, topVersions)
 
-	// Sort versions for consistent ordering
-	sort.Strings(topVersionsList)
+	// Sort versions by last day's count (highest to lowest)
+	lastSummary := summaries[len(summaries)-1]
+	slices.SortFunc(topVersionsList, func(a, b string) int {
+		countA := lastSummary.Data.Versions[a]
+		countB := lastSummary.Data.Versions[b]
+		return cmp.Compare(countB, countA)
+	})
 
 	// Create line chart
 	line := charts.NewLine()
@@ -271,7 +277,7 @@ func buildPlayersChart(summaries []SummaryRecord) *charts.Line {
 			BackgroundColor: "#ffffff",
 		}),
 		charts.WithTitleOpts(opts.Title{
-			Title:      "Number of Connected Players",
+			Title:      "Number of Active Players",
 			TitleStyle: &opts.TextStyle{Color: "#000000"},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
@@ -378,7 +384,7 @@ func buildPlayersPerInstallationChart(summaries []SummaryRecord) *charts.Bar {
 			BackgroundColor: "#ffffff",
 		}),
 		charts.WithTitleOpts(opts.Title{
-			Title:      "Connected Players per Installation",
+			Title:      "Active Players per Installation",
 			TitleStyle: &opts.TextStyle{Color: "#000000"},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
@@ -389,7 +395,7 @@ func buildPlayersPerInstallationChart(summaries []SummaryRecord) *charts.Bar {
 			Show: opts.Bool(false),
 		}),
 		charts.WithXAxisOpts(opts.XAxis{
-			Name:         "Connected Players per Installation",
+			Name:         "Active Players per Installation",
 			NameLocation: "center",
 			NameGap:      30,
 			AxisLabel: &opts.AxisLabel{
@@ -568,7 +574,7 @@ func exportChartsJSON(db *sql.DB, outputDir string) error {
 		{"id": "os", "options": osChart.JSON()},
 		{"id": "players", "options": playersChart.JSON()},
 		{"id": "playerTypes", "options": playerTypesChart.JSON()},
-		{"id": "playersPerInstallation", "options": playersPerInstallationChart.JSON()},
+		// {"id": "playersPerInstallation", "options": playersPerInstallationChart.JSON()},
 		{"id": "tracks", "options": tracksChart.JSON()},
 	}
 

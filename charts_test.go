@@ -26,27 +26,39 @@ var _ = Describe("Charts", func() {
 		db.Close()
 	})
 
-	Describe("excludeRecentDays", func() {
-		It("returns nil when summaries count is less than or equal to days", func() {
-			summaries := []SummaryRecord{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)},
-				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)},
-			}
-			Expect(excludeRecentDays(summaries, 2)).To(BeNil())
-			Expect(excludeRecentDays(summaries, 3)).To(BeNil())
+	Describe("excludeIncompleteDays", func() {
+		It("returns nil when summaries are empty", func() {
+			Expect(excludeIncompleteDays(nil)).To(BeNil())
+			Expect(excludeIncompleteDays([]SummaryRecord{})).To(BeNil())
 		})
 
-		It("returns summaries excluding last N days", func() {
+		It("returns all summaries when no significant drops", func() {
 			summaries := []SummaryRecord{
 				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 100}},
-				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 200}},
-				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 300}},
-				{Time: time.Date(2025, 1, 4, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 400}},
+				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 105}},
+				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 110}},
+				{Time: time.Date(2025, 1, 4, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 115}},
 			}
-			result := excludeRecentDays(summaries, 2)
-			Expect(result).To(HaveLen(2))
-			Expect(result[0].Data.NumInstances).To(Equal(int64(100)))
-			Expect(result[1].Data.NumInstances).To(Equal(int64(200)))
+			result := excludeIncompleteDays(summaries)
+			Expect(result).To(HaveLen(4))
+		})
+
+		It("removes trailing days with significant drops (incomplete data)", func() {
+			summaries := []SummaryRecord{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 1000}},
+				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 1050}},
+				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 1100}},
+				{Time: time.Date(2025, 1, 4, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 700}}, // 36% drop - incomplete
+				{Time: time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 100}}, // even more incomplete
+				{Time: time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 50}},  // even more incomplete
+			}
+			result := excludeIncompleteDays(summaries)
+			// Jan 6 has 50 vs Jan 5's 100 (50% drop) -> removed
+			// Jan 5 has 100 vs Jan 4's 700 (86% drop) -> removed
+			// Jan 4 has 700 vs Jan 3's 1100 (36% drop) -> removed
+			// Result: Jan 1, 2, 3
+			Expect(result).To(HaveLen(3))
+			Expect(result[2].Data.NumInstances).To(Equal(int64(1100)))
 		})
 	})
 
@@ -74,6 +86,26 @@ var _ = Describe("Charts", func() {
 			Expect(summaries[1].Time.Day()).To(Equal(2))
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(100)))
 			Expect(summaries[1].Data.NumInstances).To(Equal(int64(150)))
+		})
+
+		It("skips empty summaries where data is empty JSON object", func() {
+			summary1 := Summary{NumInstances: 100, Versions: map[string]uint64{"0.54.0": 100}}
+			// Empty summary will be stored as '{}' - we simulate by inserting directly
+			summary3 := Summary{NumInstances: 200, Versions: map[string]uint64{"0.54.0": 200}}
+
+			err := saveSummary(db, summary1, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+			Expect(err).NotTo(HaveOccurred())
+			// Insert empty JSON directly to simulate real empty summary
+			_, err = db.Exec(`INSERT INTO summary (time, data) VALUES (?, '{}')`, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
+			Expect(err).NotTo(HaveOccurred())
+			err = saveSummary(db, summary3, time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC))
+			Expect(err).NotTo(HaveOccurred())
+
+			summaries, err := getSummaries(db)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(summaries).To(HaveLen(2))
+			Expect(summaries[0].Data.NumInstances).To(Equal(int64(100)))
+			Expect(summaries[1].Data.NumInstances).To(Equal(int64(200)))
 		})
 	})
 
@@ -169,16 +201,17 @@ var _ = Describe("Charts", func() {
 			Expect(chart).NotTo(BeNil())
 		})
 
-		It("groups players with less than 0.5% into Others", func() {
-			// Total: 1000, threshold: 5 (0.5%)
+		It("groups players with less than 0.2% into Others", func() {
+			// Total: 1000, threshold: 2 (0.2%)
 			// PlayerA: 500 (50%) - kept
 			// PlayerB: 300 (30%) - kept
 			// PlayerC: 100 (10%) - kept
 			// PlayerD: 50 (5%) - kept
 			// PlayerE: 40 (4%) - kept
-			// PlayerF: 4 (0.4%) - grouped into Others
-			// PlayerG: 3 (0.3%) - grouped into Others
-			// PlayerH: 3 (0.3%) - grouped into Others
+			// PlayerF: 5 (0.5%) - kept
+			// PlayerG: 3 (0.3%) - kept
+			// PlayerH: 1 (0.1%) - grouped into Others
+			// PlayerI: 1 (0.1%) - grouped into Others
 			summaries := []SummaryRecord{
 				{
 					Time: time.Now(),
@@ -188,9 +221,10 @@ var _ = Describe("Charts", func() {
 						"PlayerC": 100,
 						"PlayerD": 50,
 						"PlayerE": 40,
-						"PlayerF": 4,
+						"PlayerF": 5,
 						"PlayerG": 3,
-						"PlayerH": 3,
+						"PlayerH": 1,
+						"PlayerI": 1,
 					}},
 				},
 			}
@@ -209,12 +243,13 @@ var _ = Describe("Charts", func() {
 			Expect(jsonStr).To(ContainSubstring("PlayerC"))
 			Expect(jsonStr).To(ContainSubstring("PlayerD"))
 			Expect(jsonStr).To(ContainSubstring("PlayerE"))
+			Expect(jsonStr).To(ContainSubstring("PlayerF"))
+			Expect(jsonStr).To(ContainSubstring("PlayerG"))
 			// Should have Others bucket
 			Expect(jsonStr).To(ContainSubstring("Others"))
 			// Should NOT include small players individually
-			Expect(jsonStr).NotTo(ContainSubstring("PlayerF"))
-			Expect(jsonStr).NotTo(ContainSubstring("PlayerG"))
 			Expect(jsonStr).NotTo(ContainSubstring("PlayerH"))
+			Expect(jsonStr).NotTo(ContainSubstring("PlayerI"))
 		})
 	})
 

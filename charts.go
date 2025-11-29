@@ -39,6 +39,7 @@ func chartsHandler(db *sql.DB) http.HandlerFunc {
 		page.AddCharts(
 			buildVersionsChart(summaries),
 			buildOSChart(summaries),
+			buildPlayerTypesChart(summaries),
 			buildPlayersChart(summaries),
 		)
 
@@ -191,6 +192,62 @@ func buildOSChart(summaries []SummaryRecord) *charts.Pie {
 	return pie
 }
 
+func buildPlayerTypesChart(summaries []SummaryRecord) *charts.Pie {
+	if len(summaries) == 0 {
+		return nil
+	}
+	latest := summaries[len(summaries)-1]
+
+	// Prepare data
+	var data []opts.PieData
+	for playerType, count := range latest.Data.PlayerTypes {
+		data = append(data, opts.PieData{Name: playerType, Value: count})
+	}
+
+	// Sort data by value descending
+	sort.Slice(data, func(i, j int) bool {
+		return data[i].Value.(uint64) > data[j].Value.(uint64)
+	})
+
+	pie := charts.NewPie()
+	pie.SetGlobalOptions(
+		charts.WithInitializationOpts(opts.Initialization{
+			Width:           chartWidth,
+			Height:          chartHeight,
+			BackgroundColor: "#ffffff",
+		}),
+		charts.WithTitleOpts(opts.Title{
+			Title:      "Player types",
+			TitleStyle: &opts.TextStyle{Color: "#000000"},
+		}),
+		charts.WithTooltipOpts(opts.Tooltip{
+			Show:      opts.Bool(true),
+			Trigger:   "item",
+			Formatter: "{b}: {c} ({d}%)",
+		}),
+		charts.WithLegendOpts(opts.Legend{
+			Show:      opts.Bool(true),
+			Right:     "10",
+			Orient:    "vertical",
+			TextStyle: &opts.TextStyle{Color: "#000000"},
+			Type:      "scroll",
+		}),
+	)
+
+	pie.AddSeries("Player type", data).
+		SetSeriesOptions(
+			charts.WithLabelOpts(opts.Label{
+				Show: opts.Bool(false),
+			}),
+			charts.WithPieChartOpts(opts.PieChart{
+				Radius: []string{"0%", "75%"},
+				Center: []string{"40%", "50%"},
+			}),
+		)
+
+	return pie
+}
+
 func buildPlayersChart(summaries []SummaryRecord) *charts.Line {
 	dates := make([]string, len(summaries))
 	for i, s := range summaries {
@@ -213,10 +270,7 @@ func buildPlayersChart(summaries []SummaryRecord) *charts.Line {
 			Trigger: "axis",
 		}),
 		charts.WithLegendOpts(opts.Legend{
-			Show:      opts.Bool(true),
-			Right:     "10",
-			Orient:    "vertical",
-			TextStyle: &opts.TextStyle{Color: "#000000"},
+			Show: opts.Bool(false),
 		}),
 		charts.WithXAxisOpts(opts.XAxis{
 			Name: "Date",
@@ -303,6 +357,9 @@ func exportChartsJSON(db *sql.DB, outputDir string) error {
 	osChart := buildOSChart(summaries)
 	osChart.Validate()
 
+	playerTypesChart := buildPlayerTypesChart(summaries)
+	playerTypesChart.Validate()
+
 	playersChart := buildPlayersChart(summaries)
 	playersChart.Validate()
 
@@ -310,6 +367,7 @@ func exportChartsJSON(db *sql.DB, outputDir string) error {
 	chartsData := []map[string]interface{}{
 		{"id": "versions", "options": versionsChart.JSON()},
 		{"id": "os", "options": osChart.JSON()},
+		{"id": "playerTypes", "options": playerTypesChart.JSON()},
 		{"id": "players", "options": playersChart.JSON()},
 	}
 

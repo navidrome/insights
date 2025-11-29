@@ -85,6 +85,7 @@ var _ = Describe("Charts", func() {
 			Expect(body).To(ContainSubstring("Navidrome Insights"))
 			Expect(body).To(ContainSubstring("Number of Navidrome Installations"))
 			Expect(body).To(ContainSubstring("Operating systems and architectures"))
+			Expect(body).To(ContainSubstring("Player types"))
 			Expect(body).To(ContainSubstring("Number of Connected Players"))
 			Expect(body).To(ContainSubstring("echarts"))
 		})
@@ -109,6 +110,29 @@ var _ = Describe("Charts", func() {
 			}
 
 			chart := buildOSChart(summaries)
+			Expect(chart).NotTo(BeNil())
+		})
+	})
+
+	Describe("buildPlayerTypesChart", func() {
+		It("returns nil when no summaries exist", func() {
+			chart := buildPlayerTypesChart([]SummaryRecord{})
+			Expect(chart).To(BeNil())
+		})
+
+		It("returns pie chart with data from latest summary", func() {
+			summaries := []SummaryRecord{
+				{
+					Time: time.Now().Add(-24 * time.Hour),
+					Data: Summary{PlayerTypes: map[string]uint64{"NavidromeUI": 10}},
+				},
+				{
+					Time: time.Now(),
+					Data: Summary{PlayerTypes: map[string]uint64{"NavidromeUI": 20, "Supersonic": 15, "Audioling": 5}},
+				},
+			}
+
+			chart := buildPlayerTypesChart(summaries)
 			Expect(chart).NotTo(BeNil())
 		})
 	})
@@ -216,10 +240,11 @@ var _ = Describe("Charts", func() {
 			var chartsData []map[string]interface{}
 			err = json.Unmarshal(data, &chartsData)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(chartsData).To(HaveLen(3))
+			Expect(chartsData).To(HaveLen(4))
 			Expect(chartsData[0]["id"]).To(Equal("versions"))
 			Expect(chartsData[1]["id"]).To(Equal("os"))
-			Expect(chartsData[2]["id"]).To(Equal("players"))
+			Expect(chartsData[2]["id"]).To(Equal("playerTypes"))
+			Expect(chartsData[3]["id"]).To(Equal("players"))
 		})
 	})
 })

@@ -69,6 +69,8 @@ var _ = Describe("Charts", func() {
 			summary := Summary{
 				NumInstances: 100,
 				Versions:     map[string]uint64{"0.54.0": 50, "0.54.1": 50},
+				Players:      map[string]uint64{"0": 10, "1": 50, "2": 30},
+				Tracks:       map[string]uint64{"0": 5, "1000": 40, "10000": 30},
 			}
 			err := saveSummary(db, summary, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
@@ -87,6 +89,8 @@ var _ = Describe("Charts", func() {
 			Expect(body).To(ContainSubstring("Operating systems and architectures"))
 			Expect(body).To(ContainSubstring("Player types"))
 			Expect(body).To(ContainSubstring("Number of Connected Players"))
+			Expect(body).To(ContainSubstring("Connected Players per Installation"))
+			Expect(body).To(ContainSubstring("Number of Tracks in Library"))
 			Expect(body).To(ContainSubstring("echarts"))
 		})
 	})
@@ -167,6 +171,68 @@ var _ = Describe("Charts", func() {
 		})
 	})
 
+	Describe("buildPlayersPerInstallationChart", func() {
+		It("returns nil when no summaries exist", func() {
+			chart := buildPlayersPerInstallationChart([]SummaryRecord{})
+			Expect(chart).To(BeNil())
+		})
+
+		It("returns bar chart with player distribution from latest summary", func() {
+			summaries := []SummaryRecord{
+				{
+					Time: time.Now(),
+					Data: Summary{Players: map[string]uint64{"0": 100, "1": 500, "2": 200, "3": 50}},
+				},
+			}
+
+			chart := buildPlayersPerInstallationChart(summaries)
+			Expect(chart).NotTo(BeNil())
+		})
+
+		It("handles empty players data", func() {
+			summaries := []SummaryRecord{
+				{
+					Time: time.Now(),
+					Data: Summary{Players: map[string]uint64{}},
+				},
+			}
+
+			chart := buildPlayersPerInstallationChart(summaries)
+			Expect(chart).NotTo(BeNil())
+		})
+	})
+
+	Describe("buildTracksChart", func() {
+		It("returns nil when no summaries exist", func() {
+			chart := buildTracksChart([]SummaryRecord{})
+			Expect(chart).To(BeNil())
+		})
+
+		It("returns horizontal bar chart with track distribution from latest summary", func() {
+			summaries := []SummaryRecord{
+				{
+					Time: time.Now(),
+					Data: Summary{Tracks: map[string]uint64{"0": 50, "1000": 200, "10000": 150, "50000": 80}},
+				},
+			}
+
+			chart := buildTracksChart(summaries)
+			Expect(chart).NotTo(BeNil())
+		})
+
+		It("handles empty tracks data", func() {
+			summaries := []SummaryRecord{
+				{
+					Time: time.Now(),
+					Data: Summary{Tracks: map[string]uint64{}},
+				},
+			}
+
+			chart := buildTracksChart(summaries)
+			Expect(chart).NotTo(BeNil())
+		})
+	})
+
 	Describe("getTopKeys", func() {
 		It("returns top N keys sorted by value descending", func() {
 			m := map[string]uint64{
@@ -224,6 +290,8 @@ var _ = Describe("Charts", func() {
 				Versions:     map[string]uint64{"0.54.0": 50, "0.54.1": 50},
 				OS:           map[string]uint64{"Linux - amd64": 80, "macOS - arm64": 20},
 				PlayerTypes:  map[string]uint64{"NavidromeUI": 50, "Supersonic": 30},
+				Players:      map[string]uint64{"0": 10, "1": 50, "2": 30},
+				Tracks:       map[string]uint64{"0": 5, "1000": 40, "10000": 30},
 			}
 			err := saveSummary(db, summary, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
@@ -240,11 +308,13 @@ var _ = Describe("Charts", func() {
 			var chartsData []map[string]interface{}
 			err = json.Unmarshal(data, &chartsData)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(chartsData).To(HaveLen(4))
+			Expect(chartsData).To(HaveLen(6))
 			Expect(chartsData[0]["id"]).To(Equal("versions"))
 			Expect(chartsData[1]["id"]).To(Equal("os"))
-			Expect(chartsData[2]["id"]).To(Equal("playerTypes"))
-			Expect(chartsData[3]["id"]).To(Equal("players"))
+			Expect(chartsData[2]["id"]).To(Equal("players"))
+			Expect(chartsData[3]["id"]).To(Equal("playerTypes"))
+			Expect(chartsData[4]["id"]).To(Equal("playersPerInstallation"))
+			Expect(chartsData[5]["id"]).To(Equal("tracks"))
 		})
 	})
 })

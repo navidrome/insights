@@ -104,7 +104,7 @@ func buildVersionsChart(summaries []SummaryRecord) *charts.Line {
 			},
 		}),
 		charts.WithGridOpts(opts.Grid{
-			Right: "200",
+			Right: "280",
 		}),
 	)
 
@@ -238,10 +238,10 @@ func exportChartsJSON(db *sql.DB, outputDir string) error {
 	osChart := buildOSChart(summaries)
 	osChart.Validate()
 
-	// Combine all charts into a single JSON object
-	chartsData := map[string]interface{}{
-		"versions": versionsChart.JSON(),
-		"os":       osChart.JSON(),
+	// Combine all charts into a single JSON array to preserve order
+	chartsData := []map[string]interface{}{
+		{"id": "versions", "options": versionsChart.JSON()},
+		{"id": "os", "options": osChart.JSON()},
 	}
 
 	// Marshal to JSON

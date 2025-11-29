@@ -180,12 +180,13 @@ var _ = Describe("Charts", func() {
 			data, err := os.ReadFile(jsonPath)
 			Expect(err).NotTo(HaveOccurred())
 
-			// Verify JSON structure
-			var chartsData map[string]interface{}
+			// Verify JSON structure (array of charts)
+			var chartsData []map[string]interface{}
 			err = json.Unmarshal(data, &chartsData)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(chartsData).To(HaveKey("versions"))
-			Expect(chartsData).To(HaveKey("os"))
+			Expect(chartsData).To(HaveLen(2))
+			Expect(chartsData[0]["id"]).To(Equal("versions"))
+			Expect(chartsData[1]["id"]).To(Equal("os"))
 		})
 	})
 })

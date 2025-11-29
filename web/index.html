@@ -64,12 +64,12 @@
 
           container.innerHTML = "";
 
-          for (const [chartId, options] of Object.entries(chartsData)) {
+          for (const { id, options } of chartsData) {
             const wrapper = document.createElement("div");
             wrapper.className = "chart-container";
 
             const chartDiv = document.createElement("div");
-            chartDiv.id = chartId;
+            chartDiv.id = id;
             chartDiv.className = "chart";
 
             wrapper.appendChild(chartDiv);

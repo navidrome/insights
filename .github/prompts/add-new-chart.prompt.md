@@ -34,7 +34,24 @@ func build{ChartName}Chart(summaries []SummaryRecord) *charts.{ChartType} {
             Title:      "Your Chart Title",
             TitleStyle: &opts.TextStyle{Color: "#000000"},
         }),
-        // Add other options as needed...
+        // Axis labels should be centered with proper spacing
+        charts.WithXAxisOpts(opts.XAxis{
+            Name:         "X Axis Label",
+            NameLocation: "center",
+            NameGap:      30,
+            AxisLabel:    &opts.AxisLabel{Color: "#000000"},
+        }),
+        charts.WithYAxisOpts(opts.YAxis{
+            Name:         "Y Axis Label",
+            NameLocation: "center",
+            NameGap:      50,  // Increase for longer labels
+            AxisLabel:    &opts.AxisLabel{Color: "#000000"},
+        }),
+        // Grid spacing to accommodate axis labels
+        charts.WithGridOpts(opts.Grid{
+            Left:   "80",   // Space for Y-axis label
+            Bottom: "60",   // Space for X-axis label
+        }),
     )
 
     // 4. Add data series

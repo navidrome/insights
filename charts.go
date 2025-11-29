@@ -97,19 +97,25 @@ func buildVersionsChart(summaries []SummaryRecord) *charts.Line {
 			TextStyle: &opts.TextStyle{Color: "#000000"},
 		}),
 		charts.WithXAxisOpts(opts.XAxis{
-			Name: "Date",
+			Name:         "Date",
+			NameLocation: "center",
+			NameGap:      30,
 			AxisLabel: &opts.AxisLabel{
 				Color: "#000000",
 			},
 		}),
 		charts.WithYAxisOpts(opts.YAxis{
-			Name: "Installations",
+			Name:         "Installations",
+			NameLocation: "center",
+			NameGap:      50,
 			AxisLabel: &opts.AxisLabel{
 				Color: "#000000",
 			},
 		}),
 		charts.WithGridOpts(opts.Grid{
-			Right: "280",
+			Left:   "80",
+			Right:  "280",
+			Bottom: "60",
 		}),
 	)
 
@@ -276,19 +282,25 @@ func buildPlayersChart(summaries []SummaryRecord) *charts.Line {
 			Show: opts.Bool(false),
 		}),
 		charts.WithXAxisOpts(opts.XAxis{
-			Name: "Date",
+			Name:         "Date",
+			NameLocation: "center",
+			NameGap:      30,
 			AxisLabel: &opts.AxisLabel{
 				Color: "#000000",
 			},
 		}),
 		charts.WithYAxisOpts(opts.YAxis{
-			Name: "Players",
+			Name:         "Players",
+			NameLocation: "center",
+			NameGap:      50,
 			AxisLabel: &opts.AxisLabel{
 				Color: "#000000",
 			},
 		}),
 		charts.WithGridOpts(opts.Grid{
-			Right: "280",
+			Left:   "80",
+			Right:  "280",
+			Bottom: "60",
 		}),
 	)
 
@@ -318,27 +330,44 @@ func buildPlayersPerInstallationChart(summaries []SummaryRecord) *charts.Bar {
 	}
 	latest := summaries[len(summaries)-1]
 
-	// Collect player counts and sort them numerically
-	type playerCount struct {
-		count int
-		value uint64
+	// Define bins for grouping player counts to handle the long tail
+	bins := []struct {
+		label string
+		min   int
+		max   int // inclusive, -1 means infinity
+	}{
+		{"0", 0, 0},
+		{"1", 1, 1},
+		{"2", 2, 2},
+		{"3", 3, 3},
+		{"4", 4, 4},
+		{"5", 5, 5},
+		{"6-10", 6, 10},
+		{"11-20", 11, 20},
+		{"21-50", 21, 50},
+		{"50+", 51, -1},
 	}
-	var counts []playerCount
+
+	// Aggregate data into bins
+	binValues := make([]uint64, len(bins))
 	for countStr, value := range latest.Data.Players {
 		var count int
 		fmt.Sscanf(countStr, "%d", &count)
-		counts = append(counts, playerCount{count, value})
-	}
-	slices.SortFunc(counts, func(a, b playerCount) int {
-		return a.count - b.count
-	})
 
-	// Build X-axis labels and data
-	xLabels := make([]string, len(counts))
-	data := make([]opts.BarData, len(counts))
-	for i, c := range counts {
-		xLabels[i] = fmt.Sprintf("%d", c.count)
-		data[i] = opts.BarData{Value: c.value}
+		for i, bin := range bins {
+			if count >= bin.min && (bin.max == -1 || count <= bin.max) {
+				binValues[i] += value
+				break
+			}
+		}
+	}
+
+	// Build chart data
+	xLabels := make([]string, len(bins))
+	data := make([]opts.BarData, len(bins))
+	for i, bin := range bins {
+		xLabels[i] = bin.label
+		data[i] = opts.BarData{Value: binValues[i]}
 	}
 
 	bar := charts.NewBar()
@@ -360,17 +389,24 @@ func buildPlayersPerInstallationChart(summaries []SummaryRecord) *charts.Bar {
 			Show: opts.Bool(false),
 		}),
 		charts.WithXAxisOpts(opts.XAxis{
-			Name: "Connected Players per Installation",
-			AxisLabel: &opts.AxisLabel{
-				Color:  "#000000",
-				Rotate: 45,
-			},
-		}),
-		charts.WithYAxisOpts(opts.YAxis{
-			Name: "Count of Installations",
+			Name:         "Connected Players per Installation",
+			NameLocation: "center",
+			NameGap:      30,
 			AxisLabel: &opts.AxisLabel{
 				Color: "#000000",
 			},
+		}),
+		charts.WithYAxisOpts(opts.YAxis{
+			Name:         "Count of Installations",
+			NameLocation: "center",
+			NameGap:      50,
+			AxisLabel: &opts.AxisLabel{
+				Color: "#000000",
+			},
+		}),
+		charts.WithGridOpts(opts.Grid{
+			Left:   "80",
+			Bottom: "60",
 		}),
 	)
 
@@ -438,19 +474,24 @@ func buildTracksChart(summaries []SummaryRecord) *charts.Bar {
 			Show: opts.Bool(false),
 		}),
 		charts.WithXAxisOpts(opts.XAxis{
-			Name: "Count of Installations",
+			Name:         "Count of Installations",
+			NameLocation: "center",
+			NameGap:      30,
 			AxisLabel: &opts.AxisLabel{
 				Color: "#000000",
 			},
 		}),
 		charts.WithYAxisOpts(opts.YAxis{
-			Name: "Tracks in Library",
+			Name:         "Tracks in Library",
+			NameLocation: "center",
+			NameGap:      130,
 			AxisLabel: &opts.AxisLabel{
 				Color: "#000000",
 			},
 		}),
 		charts.WithGridOpts(opts.Grid{
-			Left: "150",
+			Left:   "180",
+			Bottom: "60",
 		}),
 	)
 

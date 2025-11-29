@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -41,6 +42,8 @@ func chartsHandler(db *sql.DB) http.HandlerFunc {
 			buildOSChart(summaries),
 			buildPlayerTypesChart(summaries),
 			buildPlayersChart(summaries),
+			buildPlayersPerInstallationChart(summaries),
+			buildTracksChart(summaries),
 		)
 
 		w.Header().Set("Content-Type", "text/html")
@@ -309,6 +312,155 @@ func buildPlayersChart(summaries []SummaryRecord) *charts.Line {
 	return line
 }
 
+func buildPlayersPerInstallationChart(summaries []SummaryRecord) *charts.Bar {
+	if len(summaries) == 0 {
+		return nil
+	}
+	latest := summaries[len(summaries)-1]
+
+	// Collect player counts and sort them numerically
+	type playerCount struct {
+		count int
+		value uint64
+	}
+	var counts []playerCount
+	for countStr, value := range latest.Data.Players {
+		var count int
+		fmt.Sscanf(countStr, "%d", &count)
+		counts = append(counts, playerCount{count, value})
+	}
+	slices.SortFunc(counts, func(a, b playerCount) int {
+		return a.count - b.count
+	})
+
+	// Build X-axis labels and data
+	xLabels := make([]string, len(counts))
+	data := make([]opts.BarData, len(counts))
+	for i, c := range counts {
+		xLabels[i] = fmt.Sprintf("%d", c.count)
+		data[i] = opts.BarData{Value: c.value}
+	}
+
+	bar := charts.NewBar()
+	bar.SetGlobalOptions(
+		charts.WithInitializationOpts(opts.Initialization{
+			Width:           chartWidth,
+			Height:          chartHeight,
+			BackgroundColor: "#ffffff",
+		}),
+		charts.WithTitleOpts(opts.Title{
+			Title:      "Connected Players per Installation",
+			TitleStyle: &opts.TextStyle{Color: "#000000"},
+		}),
+		charts.WithTooltipOpts(opts.Tooltip{
+			Show:    opts.Bool(true),
+			Trigger: "axis",
+		}),
+		charts.WithLegendOpts(opts.Legend{
+			Show: opts.Bool(false),
+		}),
+		charts.WithXAxisOpts(opts.XAxis{
+			Name: "Connected Players per Installation",
+			AxisLabel: &opts.AxisLabel{
+				Color:  "#000000",
+				Rotate: 45,
+			},
+		}),
+		charts.WithYAxisOpts(opts.YAxis{
+			Name: "Count of Installations",
+			AxisLabel: &opts.AxisLabel{
+				Color: "#000000",
+			},
+		}),
+	)
+
+	bar.SetXAxis(xLabels).AddSeries("Installations", data)
+
+	return bar
+}
+
+var trackBinLabels = []string{
+	"0", "1-500", "501-1,000", "1,001-5,000", "5,001-10,000",
+	"10,001-20,000", "20,001-50,000", "50,001-100,000",
+	"100,001-500,000", "500,001-1,000,000", ">1,000,001",
+}
+
+func buildTracksChart(summaries []SummaryRecord) *charts.Bar {
+	if len(summaries) == 0 {
+		return nil
+	}
+	latest := summaries[len(summaries)-1]
+
+	// Map bin values to labels, maintaining order from trackBins in summary.go
+	binToLabel := map[string]string{
+		"0":       "0",
+		"1":       "1-500",
+		"500":     "501-1,000",
+		"1000":    "1,001-5,000",
+		"5000":    "5,001-10,000",
+		"10000":   "10,001-20,000",
+		"20000":   "20,001-50,000",
+		"50000":   "50,001-100,000",
+		"100000":  "100,001-500,000",
+		"500000":  "500,001-1,000,000",
+		"1000000": ">1,000,001",
+	}
+
+	// Build data in the order of trackBinLabels
+	data := make([]opts.BarData, len(trackBinLabels))
+	for i, label := range trackBinLabels {
+		var value uint64
+		for binKey, binLabel := range binToLabel {
+			if binLabel == label {
+				value = latest.Data.Tracks[binKey]
+				break
+			}
+		}
+		data[i] = opts.BarData{Value: value}
+	}
+
+	bar := charts.NewBar()
+	bar.SetGlobalOptions(
+		charts.WithInitializationOpts(opts.Initialization{
+			Width:           chartWidth,
+			Height:          chartHeight,
+			BackgroundColor: "#ffffff",
+		}),
+		charts.WithTitleOpts(opts.Title{
+			Title:      "Number of Tracks in Library",
+			TitleStyle: &opts.TextStyle{Color: "#000000"},
+		}),
+		charts.WithTooltipOpts(opts.Tooltip{
+			Show:    opts.Bool(true),
+			Trigger: "axis",
+		}),
+		charts.WithLegendOpts(opts.Legend{
+			Show: opts.Bool(false),
+		}),
+		charts.WithXAxisOpts(opts.XAxis{
+			Name: "Count of Installations",
+			AxisLabel: &opts.AxisLabel{
+				Color: "#000000",
+			},
+		}),
+		charts.WithYAxisOpts(opts.YAxis{
+			Name: "Tracks in Library",
+			AxisLabel: &opts.AxisLabel{
+				Color: "#000000",
+			},
+		}),
+		charts.WithGridOpts(opts.Grid{
+			Left: "150",
+		}),
+	)
+
+	bar.SetXAxis(trackBinLabels).
+		AddSeries("Installations", data).
+		XYReversal()
+
+	return bar
+}
+
 // getTopKeys returns the top N keys from a map sorted by value descending
 func getTopKeys(m map[string]uint64, n int) []string {
 	type kv struct {
@@ -363,12 +515,20 @@ func exportChartsJSON(db *sql.DB, outputDir string) error {
 	playersChart := buildPlayersChart(summaries)
 	playersChart.Validate()
 
+	playersPerInstallationChart := buildPlayersPerInstallationChart(summaries)
+	playersPerInstallationChart.Validate()
+
+	tracksChart := buildTracksChart(summaries)
+	tracksChart.Validate()
+
 	// Combine all charts into a single JSON array to preserve order
 	chartsData := []map[string]interface{}{
 		{"id": "versions", "options": versionsChart.JSON()},
 		{"id": "os", "options": osChart.JSON()},
-		{"id": "playerTypes", "options": playerTypesChart.JSON()},
 		{"id": "players", "options": playersChart.JSON()},
+		{"id": "playerTypes", "options": playerTypesChart.JSON()},
+		{"id": "playersPerInstallation", "options": playersPerInstallationChart.JSON()},
+		{"id": "tracks", "options": tracksChart.JSON()},
 	}
 
 	// Marshal to JSON

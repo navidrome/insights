@@ -86,7 +86,6 @@ func summarizeData(db *sql.DB, date time.Time) error {
 	err = saveSummary(db, summary, date)
 	if err != nil {
 		log.Printf("Error saving summary: %s", err)
-		return err
 	}
 	return err
 }

@@ -13,3 +13,4 @@ services:
       - "$PORT:$PORT"
     environment:
       GOCACHE: /go-cache
+      DATA_FOLDER: ${DATA_FOLDER}

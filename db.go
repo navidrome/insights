@@ -91,7 +91,7 @@ type SummaryRecord struct {
 }
 
 func getSummaries(db *sql.DB) ([]SummaryRecord, error) {
-	query := `SELECT time, data FROM summary ORDER BY time ASC`
+	query := `SELECT time, data FROM summary WHERE data != '{}' ORDER BY time ASC`
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, err

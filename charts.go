@@ -17,12 +17,27 @@ import (
 	"github.com/go-echarts/go-echarts/v2/opts"
 )
 
-// excludeRecentDays removes the last N days of data to avoid incomplete data
-func excludeRecentDays(summaries []SummaryRecord, days int) []SummaryRecord {
-	if len(summaries) <= days {
+// excludeIncompleteDays removes any trailing days when the instance count drops significantly
+// (more than 20% drop) compared to the previous day, as this indicates incomplete data.
+func excludeIncompleteDays(summaries []SummaryRecord) []SummaryRecord {
+	if len(summaries) == 0 {
 		return nil
 	}
-	return summaries[:len(summaries)-days]
+
+	// Remove trailing incomplete data (significant drops from previous day)
+	for len(summaries) > 1 {
+		last := summaries[len(summaries)-1]
+		prev := summaries[len(summaries)-2]
+		if prev.Data.NumInstances > 0 {
+			dropRatio := float64(last.Data.NumInstances) / float64(prev.Data.NumInstances)
+			if dropRatio < 0.8 { // More than 20% drop indicates incomplete data
+				summaries = summaries[:len(summaries)-1]
+				continue
+			}
+		}
+		break
+	}
+	return summaries
 }
 
 const (
@@ -39,8 +54,8 @@ func chartsHandler(db *sql.DB) http.HandlerFunc {
 			http.Error(w, "Failed to load data", http.StatusInternalServerError)
 			return
 		}
-		// Exclude last 2 days to avoid incomplete data
-		summaries = excludeRecentDays(summaries, 2)
+		// Exclude incomplete days (significant drops indicate incomplete data)
+		summaries = excludeIncompleteDays(summaries)
 		if len(summaries) == 0 {
 			http.Error(w, "No data available", http.StatusNotFound)
 			return
@@ -569,8 +584,8 @@ func exportChartsJSON(db *sql.DB, outputDir string) error {
 	if err != nil {
 		return err
 	}
-	// Exclude last 2 days to avoid incomplete data
-	summaries = excludeRecentDays(summaries, 2)
+	// Exclude incomplete days (significant drops indicate incomplete data)
+	summaries = excludeIncompleteDays(summaries)
 	if len(summaries) == 0 {
 		log.Print("No data to export")
 		return nil

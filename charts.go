@@ -35,6 +35,7 @@ func chartsHandler(db *sql.DB) http.HandlerFunc {
 		page.PageTitle = "Navidrome Insights"
 		page.AddCharts(
 			buildVersionsChart(summaries),
+			buildOSChart(summaries),
 		)
 
 		w.Header().Set("Content-Type", "text/html")
@@ -128,6 +129,62 @@ func buildVersionsChart(summaries []SummaryRecord) *charts.Line {
 	)
 
 	return line
+}
+
+func buildOSChart(summaries []SummaryRecord) *charts.Pie {
+	if len(summaries) == 0 {
+		return nil
+	}
+	latest := summaries[len(summaries)-1]
+
+	// Prepare data
+	var data []opts.PieData
+	for os, count := range latest.Data.OS {
+		data = append(data, opts.PieData{Name: os, Value: count})
+	}
+
+	// Sort data by value descending
+	sort.Slice(data, func(i, j int) bool {
+		return data[i].Value.(uint64) > data[j].Value.(uint64)
+	})
+
+	pie := charts.NewPie()
+	pie.SetGlobalOptions(
+		charts.WithInitializationOpts(opts.Initialization{
+			Width:           chartWidth,
+			Height:          chartHeight,
+			BackgroundColor: "#1a1a1a",
+		}),
+		charts.WithTitleOpts(opts.Title{
+			Title:      "Operating systems and architectures",
+			TitleStyle: &opts.TextStyle{Color: "#ffffff"},
+		}),
+		charts.WithTooltipOpts(opts.Tooltip{
+			Show:      opts.Bool(true),
+			Trigger:   "item",
+			Formatter: "{b}: {c} ({d}%)",
+		}),
+		charts.WithLegendOpts(opts.Legend{
+			Show:      opts.Bool(true),
+			Right:     "10",
+			Orient:    "vertical",
+			TextStyle: &opts.TextStyle{Color: "#ffffff"},
+			Type:      "scroll",
+		}),
+	)
+
+	pie.AddSeries("OS", data).
+		SetSeriesOptions(
+			charts.WithLabelOpts(opts.Label{
+				Show: opts.Bool(false),
+			}),
+			charts.WithPieChartOpts(opts.PieChart{
+				Radius: []string{"0%", "75%"},
+				Center: []string{"40%", "50%"},
+			}),
+		)
+
+	return pie
 }
 
 // getTopKeys returns the top N keys from a map sorted by value descending

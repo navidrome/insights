@@ -1,100 +1,102 @@
 # Navidrome Insights Server
 
-A lightweight Go service that collects anonymous usage metrics from Navidrome instances and generates aggregated summaries.
+A lightweight Go service that collects anonymous usage metrics from Navidrome instances and generates aggregated summaries with visualizations.
 
 ## Architecture
 
-- **Single-binary HTTP server** using Chi router (`main.go`, `handler.go`)
-- **SQLite database** with WAL mode for storage (`db.go`)
-- **Cron-based background tasks** for summarization and cleanup (`tasks.go`)
-- **Data model** imported from `github.com/navidrome/navidrome/core/metrics/insights`
+```
+main.go          → Entry point: HTTP server setup, cron tasks registration
+handler.go       → POST /collect endpoint, receives insights.Data from Navidrome
+db.go            → SQLite operations (openDB, saveReport, purgeOldEntries)
+summary.go       → Data aggregation logic (summarizeData, mapping functions)
+summary_store.go → File-based summary persistence (JSON files in summaries/)
+charts.go        → Chart generation using go-echarts (line, pie, bar charts)
+tasks.go         → Cron job wrappers (summarize, generateCharts, cleanup)
+```
 
 ### Data Flow
 
 1. Navidrome instances POST JSON to `/collect` (rate-limited: 1 req/30min per IP)
-2. Raw data stored in `insights` table with instance ID and timestamp
-3. Every 2 hours, `summarizeData()` aggregates data into `summary` table
-4. Daily cleanup purges entries older than 90 days
+2. Raw data stored in SQLite `insights` table with instance ID and timestamp
+3. Every 2 hours: `summarizeData()` aggregates last 10 days → JSON files in `summaries/YYYY/MM/`
+4. Daily at 00:05 UTC: `exportChartsJSON()` generates `web/chartdata/charts.json` for frontend
+5. Daily at 00:30 UTC: `purgeOldEntries()` removes entries older than 30 days
 
-### insights.Data Structure (from Navidrome)
+### External Data Model
 
-The `insights.Data` struct is defined in [`github.com/navidrome/navidrome/core/metrics/insights`](https://github.com/navidrome/navidrome/blob/main/core/metrics/insights/data.go) and includes:
-
-- `id`: Unique instance identifier (UUID stored in Navidrome's DB)
-- `version`: Navidrome version string (e.g., `0.54.2 (0b184893)`)
-- `uptime`: Server uptime in seconds
-- `build`: Go build settings and version
-- `os`: Type, distro, version, arch, numCPU, containerized flag
-- `mem`: Memory stats (alloc, totalAlloc, sys, numGC)
-- `fs`: Filesystem info for music/data/cache/backup folders
-- `library`: Tracks, albums, artists, playlists, shares, radios, activeUsers, activePlayers
-- `config`: Feature flags and settings (40+ boolean/string fields)
-- `plugins`: Map of installed plugin info
+The `insights.Data` struct is imported from `github.com/navidrome/navidrome/core/metrics/insights`. Key fields: `Version`, `OS`, `Library.ActivePlayers`, `Library.Tracks`. See the [Navidrome source](https://github.com/navidrome/navidrome/blob/main/core/metrics/insights/data.go).
 
 ## Development
 
 ```bash
-make dev      # Builds and runs with Docker Compose + hot reload (reflex)
-make lint     # Run golangci-lint in container
-make linux    # Build production Linux binary
+make dev      # Docker Compose + hot reload (reflex), creates .env if missing
+make lint     # golangci-lint in container
+make linux    # Build production binary to binary/
+go test ./... # Run Ginkgo tests locally
 ```
 
-**Environment**: Create `.env` with `PORT=8080` (auto-created by `make dev`)
+**Environment variables**:
 
-To use a different data folder, set `DATA_FOLDER` env var (default: local folder)
-
-## Testing
-
-Uses **Ginkgo/Gomega** BDD framework:
-
-```bash
-go test ./...           # Run all tests
-ginkgo -v               # Verbose Ginkgo output
-```
-
-Test patterns in `summary_test.go`:
-
-- Use `DescribeTable` for parameterized tests
-- Define local type aliases (e.g., `insightsOS`, `insightsLibrary`) to construct test `insights.Data`
+- `PORT` - HTTP server port (default: `8080`)
+- `DATA_FOLDER` - Where DB and summaries are stored (default: current dir)
 
 ## Key Patterns
 
-### Mapping Functions (`summary.go`)
+### Regex-Based Mapping (`summary.go`)
 
-Data normalization uses regex-based mapping for versions, players, and OS types:
+Player names and versions are normalized using regex maps. Empty string values mean "discard":
 
 ```go
 var playersTypes = map[*regexp.Regexp]string{
-    regexp.MustCompile("NavidromeUI.*"): "NavidromeUI",
-    // Empty string = discard this entry
-    regexp.MustCompile("feishin"):       "",
+    regexp.MustCompile("NavidromeUI.*"): "NavidromeUI",  // Normalize variants
+    regexp.MustCompile("feishin"):       "",             // Discard (old version bug)
+    regexp.MustCompile("DSubCC"):        "",             // Discard (chromecast noise)
 }
 ```
 
-### Binning (`mapToBins`)
+### Binning for Distributions (`mapToBins`)
 
-Numeric values are grouped into predefined bins for distribution analysis:
+Numeric values are grouped into predefined bins for histograms:
 
 ```go
-var trackBins = []int64{0, 1, 100, 500, 1000, 5000, ...}
+var trackBins = []int64{0, 1, 100, 500, 1000, 5000, 10000, 20000, 50000, 100000, 500000, 1000000}
 ```
 
 ### Iterator Pattern
 
-`selectData()` returns `iter.Seq[insights.Data]` for memory-efficient row processing.
+`selectData()` returns `iter.Seq[insights.Data]` for memory-efficient processing of large datasets.
 
-## Database Schema
+### Incomplete Data Handling (`charts.go`)
+
+`excludeIncompleteDays()` removes trailing days where instance count drops >20%, indicating incomplete data collection.
+
+## Testing
+
+Uses **Ginkgo/Gomega** BDD framework. Patterns to follow:
+
+- Use `DescribeTable` for parameterized tests (see `summary_test.go`)
+- Define local type aliases to construct `insights.Data` for tests:
+  ```go
+  type insightsOS struct { Type string; Arch string; Containerized bool }
+  type insightsLibrary struct { ActivePlayers map[string]int64 }
+  ```
+- Test files use temp directories via `os.MkdirTemp` and set `DATA_FOLDER` env var
+
+## Database
+
+SQLite with WAL mode. Schema auto-created in `openDB()`:
 
 ```sql
--- Raw metrics from instances
-insights(id VARCHAR, time DATETIME, data JSONB)
-
--- Aggregated daily summaries
-summary(id INTEGER, time DATETIME UNIQUE, data JSONB)
+insights(id VARCHAR, time DATETIME, data JSONB, PRIMARY KEY (id, time))
 ```
 
-## Docker Setup
+Summaries are stored as JSON files in `summaries/YYYY/MM/summary-YYYY-MM-DD.json`, not in SQLite.
 
-- **Development**: `docker/app/` with reflex for hot reload
-- **Production**: `docker/app-prod/` multi-stage build, outputs to `binary/`
-- Production deployment uses Caddy (`prod/Caddyfile`)
+## Charts
+
+Built with go-echarts. Charts are exported to JSON and consumed by `web/index.html`:
+
+- `buildVersionsChart()` - Line chart of version adoption over time (top 15 versions)
+- `buildOSChart()` - Pie chart of OS/arch distribution
+- `buildPlayerTypesChart()` - Pie chart, groups <0.2% into "Others"
+- `buildTracksChart()` - Horizontal bar chart of library sizes

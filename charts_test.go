@@ -81,7 +81,31 @@ var _ = Describe("Charts", func() {
 			body := w.Body.String()
 			Expect(body).To(ContainSubstring("Navidrome Insights"))
 			Expect(body).To(ContainSubstring("Number of Navidrome Installations"))
+			Expect(body).To(ContainSubstring("Operating systems and architectures"))
 			Expect(body).To(ContainSubstring("echarts"))
+		})
+	})
+
+	Describe("buildOSChart", func() {
+		It("returns nil when no summaries exist", func() {
+			chart := buildOSChart([]SummaryRecord{})
+			Expect(chart).To(BeNil())
+		})
+
+		It("returns pie chart with data from latest summary", func() {
+			summaries := []SummaryRecord{
+				{
+					Time: time.Now().Add(-24 * time.Hour),
+					Data: Summary{OS: map[string]uint64{"Linux - amd64": 10}},
+				},
+				{
+					Time: time.Now(),
+					Data: Summary{OS: map[string]uint64{"Linux - amd64": 20, "macOS - arm64": 5}},
+				},
+			}
+
+			chart := buildOSChart(summaries)
+			Expect(chart).NotTo(BeNil())
 		})
 	})
 

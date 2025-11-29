@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -31,10 +32,12 @@ func startTasks(ctx context.Context, db *sql.DB) error {
 
 func main() {
 	ctx := context.Background()
-	db, err := openDB("insights.db")
+	dataFolder := os.Getenv("DATA_FOLDER")
+	db, err := openDB(filepath.Join(dataFolder, "insights.db"))
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Printf("Connected to database at %s", filepath.Join(dataFolder, "insights.db"))
 
 	if err := startTasks(ctx, db); err != nil {
 		log.Fatal(err)

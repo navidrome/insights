@@ -85,6 +85,7 @@ var _ = Describe("Charts", func() {
 			Expect(body).To(ContainSubstring("Navidrome Insights"))
 			Expect(body).To(ContainSubstring("Number of Navidrome Installations"))
 			Expect(body).To(ContainSubstring("Operating systems and architectures"))
+			Expect(body).To(ContainSubstring("Number of Connected Players"))
 			Expect(body).To(ContainSubstring("echarts"))
 		})
 	})
@@ -108,6 +109,36 @@ var _ = Describe("Charts", func() {
 			}
 
 			chart := buildOSChart(summaries)
+			Expect(chart).NotTo(BeNil())
+		})
+	})
+
+	Describe("buildPlayersChart", func() {
+		It("returns line chart with player totals over time", func() {
+			summaries := []SummaryRecord{
+				{
+					Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+					Data: Summary{PlayerTypes: map[string]uint64{"NavidromeUI": 10, "Supersonic": 5}},
+				},
+				{
+					Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC),
+					Data: Summary{PlayerTypes: map[string]uint64{"NavidromeUI": 20, "Supersonic": 10, "Audioling": 5}},
+				},
+			}
+
+			chart := buildPlayersChart(summaries)
+			Expect(chart).NotTo(BeNil())
+		})
+
+		It("handles empty player types", func() {
+			summaries := []SummaryRecord{
+				{
+					Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+					Data: Summary{PlayerTypes: map[string]uint64{}},
+				},
+			}
+
+			chart := buildPlayersChart(summaries)
 			Expect(chart).NotTo(BeNil())
 		})
 	})
@@ -168,6 +199,7 @@ var _ = Describe("Charts", func() {
 				NumInstances: 100,
 				Versions:     map[string]uint64{"0.54.0": 50, "0.54.1": 50},
 				OS:           map[string]uint64{"Linux - amd64": 80, "macOS - arm64": 20},
+				PlayerTypes:  map[string]uint64{"NavidromeUI": 50, "Supersonic": 30},
 			}
 			err := saveSummary(db, summary, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
@@ -184,9 +216,10 @@ var _ = Describe("Charts", func() {
 			var chartsData []map[string]interface{}
 			err = json.Unmarshal(data, &chartsData)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(chartsData).To(HaveLen(2))
+			Expect(chartsData).To(HaveLen(3))
 			Expect(chartsData[0]["id"]).To(Equal("versions"))
 			Expect(chartsData[1]["id"]).To(Equal("os"))
+			Expect(chartsData[2]["id"]).To(Equal("players"))
 		})
 	})
 })

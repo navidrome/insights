@@ -12,7 +12,9 @@ const chartDataDir = "web/chartdata"
 func cleanup(_ context.Context, db *sql.DB) func() {
 	return func() {
 		log.Print("Cleaning old data")
-		_ = purgeOldEntries(db)
+		if err := purgeOldEntries(db); err != nil {
+			log.Printf("Error cleaning old data: %v", err)
+		}
 	}
 }
 
@@ -21,7 +23,7 @@ func summarize(_ context.Context, db *sql.DB) func() {
 		log.Print("Summarizing data")
 		now := time.Now().Truncate(24 * time.Hour).UTC()
 		for d := 0; d < 45; d++ {
-			date := now.Add(-time.Duration(d) * 24 * time.Hour)
+			date := now.AddDate(0, 0, -d)
 			log.Print("Summarizing data for ", date.Format("2006-01-02"))
 			_ = summarizeData(db, date)
 		}

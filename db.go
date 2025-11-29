@@ -84,3 +84,32 @@ func purgeOldEntries(db *sql.DB) error {
 	log.Printf("Deleted %d old entries\n", deleted)
 	return nil
 }
+
+type SummaryRecord struct {
+	Time time.Time
+	Data Summary
+}
+
+func getSummaries(db *sql.DB) ([]SummaryRecord, error) {
+	query := `SELECT time, data FROM summary ORDER BY time ASC`
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var summaries []SummaryRecord
+	for rows.Next() {
+		var t time.Time
+		var dataJSON []byte
+		if err := rows.Scan(&t, &dataJSON); err != nil {
+			return nil, err
+		}
+		var summary Summary
+		if err := json.Unmarshal(dataJSON, &summary); err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, SummaryRecord{Time: t, Data: summary})
+	}
+	return summaries, rows.Err()
+}

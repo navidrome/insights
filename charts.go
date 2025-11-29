@@ -1,0 +1,161 @@
+package main
+
+import (
+	"database/sql"
+	"log"
+	"net/http"
+	"slices"
+	"sort"
+
+	"github.com/go-echarts/go-echarts/v2/charts"
+	"github.com/go-echarts/go-echarts/v2/components"
+	"github.com/go-echarts/go-echarts/v2/opts"
+)
+
+const (
+	chartWidth  = "1400px"
+	chartHeight = "500px"
+	topVersions = 15
+)
+
+func chartsHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		summaries, err := getSummaries(db)
+		if err != nil {
+			log.Printf("Error loading summaries: %v", err)
+			http.Error(w, "Failed to load data", http.StatusInternalServerError)
+			return
+		}
+		if len(summaries) == 0 {
+			http.Error(w, "No data available", http.StatusNotFound)
+			return
+		}
+
+		page := components.NewPage()
+		page.PageTitle = "Navidrome Insights"
+		page.AddCharts(
+			buildVersionsChart(summaries),
+		)
+
+		w.Header().Set("Content-Type", "text/html")
+		_ = page.Render(w)
+	}
+}
+
+func buildVersionsChart(summaries []SummaryRecord) *charts.Line {
+	// Build X-axis dates
+	dates := make([]string, len(summaries))
+	for i, s := range summaries {
+		dates[i] = s.Time.Format("Jan 02, 2006")
+	}
+
+	// Collect all versions and their total counts, plus "All" totals
+	versionTotals := make(map[string]uint64)
+	allTotals := make([]uint64, len(summaries))
+	for i, s := range summaries {
+		for version, count := range s.Data.Versions {
+			versionTotals[version] += count
+			allTotals[i] += count
+		}
+	}
+
+	// Get top N versions by total count
+	topVersionsList := getTopKeys(versionTotals, topVersions)
+
+	// Sort versions for consistent ordering
+	sort.Strings(topVersionsList)
+
+	// Create line chart
+	line := charts.NewLine()
+	line.SetGlobalOptions(
+		charts.WithInitializationOpts(opts.Initialization{
+			Width:           chartWidth,
+			Height:          chartHeight,
+			BackgroundColor: "#1a1a1a",
+		}),
+		charts.WithTitleOpts(opts.Title{
+			Title:      "Number of Navidrome Installations",
+			TitleStyle: &opts.TextStyle{Color: "#ffffff"},
+		}),
+		charts.WithTooltipOpts(opts.Tooltip{
+			Show:    opts.Bool(true),
+			Trigger: "axis",
+		}),
+		charts.WithLegendOpts(opts.Legend{
+			Show:      opts.Bool(true),
+			Right:     "10",
+			Orient:    "vertical",
+			TextStyle: &opts.TextStyle{Color: "#ffffff"},
+		}),
+		charts.WithXAxisOpts(opts.XAxis{
+			Name: "Date",
+			AxisLabel: &opts.AxisLabel{
+				Color: "#ffffff",
+			},
+		}),
+		charts.WithYAxisOpts(opts.YAxis{
+			Name: "Installations",
+			AxisLabel: &opts.AxisLabel{
+				Color: "#ffffff",
+			},
+		}),
+		charts.WithGridOpts(opts.Grid{
+			Right: "200",
+		}),
+	)
+
+	line.SetXAxis(dates)
+
+	// Add "All" series first (total installations)
+	allData := make([]opts.LineData, len(summaries))
+	for i, total := range allTotals {
+		allData[i] = opts.LineData{Value: total}
+	}
+	line.AddSeries("All", allData)
+
+	// Add series for each version
+	for _, version := range topVersionsList {
+		data := make([]opts.LineData, len(summaries))
+		for i, s := range summaries {
+			count := s.Data.Versions[version]
+			data[i] = opts.LineData{Value: count}
+		}
+		line.AddSeries(version, data)
+	}
+
+	line.SetSeriesOptions(
+		charts.WithLineChartOpts(opts.LineChart{Smooth: opts.Bool(true)}),
+	)
+
+	return line
+}
+
+// getTopKeys returns the top N keys from a map sorted by value descending
+func getTopKeys(m map[string]uint64, n int) []string {
+	type kv struct {
+		Key   string
+		Value uint64
+	}
+	var pairs []kv
+	for k, v := range m {
+		pairs = append(pairs, kv{k, v})
+	}
+	slices.SortFunc(pairs, func(a, b kv) int {
+		if a.Value > b.Value {
+			return -1
+		}
+		if a.Value < b.Value {
+			return 1
+		}
+		return 0
+	})
+
+	if n > len(pairs) {
+		n = len(pairs)
+	}
+	result := make([]string, n)
+	for i := 0; i < n; i++ {
+		result[i] = pairs[i].Key
+	}
+	return result
+}

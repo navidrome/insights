@@ -45,9 +45,13 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
+
+	// Charts endpoint (no rate limiting)
+	r.Get("/charts", chartsHandler(db))
+
+	// Rate-limited collect endpoint
 	limiter := httprate.NewRateLimiter(1, 30*time.Minute, httprate.WithKeyByIP())
-	r.Use(limiter.Handler)
-	r.Post("/collect", handler(db))
+	r.With(limiter.Handler).Post("/collect", handler(db))
 
 	port := os.Getenv("PORT")
 	if port == "" {

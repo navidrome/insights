@@ -15,9 +15,9 @@ import (
 )
 
 func startTasks(ctx context.Context, db *sql.DB) error {
-	c := cron.New()
-	// Run summarize every two hours
-	_, err := c.AddFunc("0 */2 * * *", summarize(ctx, db))
+	c := cron.New(cron.WithLocation(time.UTC))
+	// Run summarize every day at midnight UTC
+	_, err := c.AddFunc("0 0 * * *", summarize(ctx, db))
 	if err != nil {
 		return err
 	}
@@ -46,7 +46,13 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 
-	// Charts endpoint (no rate limiting)
+	// Static files for charts
+	r.Handle("/chartdata/*", http.StripPrefix("/chartdata/", http.FileServer(http.Dir("web/chartdata"))))
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "web/index.html")
+	})
+
+	// Charts endpoint (no rate limiting) - legacy, renders server-side
 	r.Get("/charts", chartsHandler(db))
 
 	// Rate-limited collect endpoint

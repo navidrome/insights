@@ -2,8 +2,11 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -135,6 +138,54 @@ var _ = Describe("Charts", func() {
 			m := map[string]uint64{}
 			result := getTopKeys(m, 5)
 			Expect(result).To(BeEmpty())
+		})
+	})
+
+	Describe("exportChartsJSON", func() {
+		var tempDir string
+
+		BeforeEach(func() {
+			var err error
+			tempDir, err = os.MkdirTemp("", "charts-test")
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		AfterEach(func() {
+			os.RemoveAll(tempDir)
+		})
+
+		It("does nothing when no summaries exist", func() {
+			err := exportChartsJSON(db, tempDir)
+			Expect(err).NotTo(HaveOccurred())
+
+			// File should not be created
+			_, err = os.Stat(filepath.Join(tempDir, "charts.json"))
+			Expect(os.IsNotExist(err)).To(BeTrue())
+		})
+
+		It("exports charts JSON when data exists", func() {
+			summary := Summary{
+				NumInstances: 100,
+				Versions:     map[string]uint64{"0.54.0": 50, "0.54.1": 50},
+				OS:           map[string]uint64{"Linux - amd64": 80, "macOS - arm64": 20},
+			}
+			err := saveSummary(db, summary, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+			Expect(err).NotTo(HaveOccurred())
+
+			err = exportChartsJSON(db, tempDir)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify file exists
+			jsonPath := filepath.Join(tempDir, "charts.json")
+			data, err := os.ReadFile(jsonPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify JSON structure
+			var chartsData map[string]interface{}
+			err = json.Unmarshal(data, &chartsData)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(chartsData).To(HaveKey("versions"))
+			Expect(chartsData).To(HaveKey("os"))
 		})
 	})
 })

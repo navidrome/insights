@@ -26,6 +26,30 @@ var _ = Describe("Charts", func() {
 		db.Close()
 	})
 
+	Describe("excludeRecentDays", func() {
+		It("returns nil when summaries count is less than or equal to days", func() {
+			summaries := []SummaryRecord{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)},
+				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)},
+			}
+			Expect(excludeRecentDays(summaries, 2)).To(BeNil())
+			Expect(excludeRecentDays(summaries, 3)).To(BeNil())
+		})
+
+		It("returns summaries excluding last N days", func() {
+			summaries := []SummaryRecord{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 100}},
+				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 200}},
+				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 300}},
+				{Time: time.Date(2025, 1, 4, 0, 0, 0, 0, time.UTC), Data: Summary{NumInstances: 400}},
+			}
+			result := excludeRecentDays(summaries, 2)
+			Expect(result).To(HaveLen(2))
+			Expect(result[0].Data.NumInstances).To(Equal(int64(100)))
+			Expect(result[1].Data.NumInstances).To(Equal(int64(200)))
+		})
+	})
+
 	Describe("getSummaries", func() {
 		It("returns empty slice when no summaries exist", func() {
 			summaries, err := getSummaries(db)
@@ -72,7 +96,12 @@ var _ = Describe("Charts", func() {
 				Players:      map[string]uint64{"0": 10, "1": 50, "2": 30},
 				Tracks:       map[string]uint64{"0": 5, "1000": 40, "10000": 30},
 			}
+			// Insert 3 days of data (last 2 are excluded)
 			err := saveSummary(db, summary, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+			Expect(err).NotTo(HaveOccurred())
+			err = saveSummary(db, summary, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
+			Expect(err).NotTo(HaveOccurred())
+			err = saveSummary(db, summary, time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
 
 			handler := chartsHandler(db)
@@ -138,6 +167,54 @@ var _ = Describe("Charts", func() {
 
 			chart := buildPlayerTypesChart(summaries)
 			Expect(chart).NotTo(BeNil())
+		})
+
+		It("groups players with less than 0.5% into Others", func() {
+			// Total: 1000, threshold: 5 (0.5%)
+			// PlayerA: 500 (50%) - kept
+			// PlayerB: 300 (30%) - kept
+			// PlayerC: 100 (10%) - kept
+			// PlayerD: 50 (5%) - kept
+			// PlayerE: 40 (4%) - kept
+			// PlayerF: 4 (0.4%) - grouped into Others
+			// PlayerG: 3 (0.3%) - grouped into Others
+			// PlayerH: 3 (0.3%) - grouped into Others
+			summaries := []SummaryRecord{
+				{
+					Time: time.Now(),
+					Data: Summary{PlayerTypes: map[string]uint64{
+						"PlayerA": 500,
+						"PlayerB": 300,
+						"PlayerC": 100,
+						"PlayerD": 50,
+						"PlayerE": 40,
+						"PlayerF": 4,
+						"PlayerG": 3,
+						"PlayerH": 3,
+					}},
+				},
+			}
+
+			chart := buildPlayerTypesChart(summaries)
+			Expect(chart).NotTo(BeNil())
+
+			// Marshal chart to JSON and verify content
+			jsonBytes, err := json.Marshal(chart.JSON())
+			Expect(err).NotTo(HaveOccurred())
+			jsonStr := string(jsonBytes)
+
+			// Should include major players
+			Expect(jsonStr).To(ContainSubstring("PlayerA"))
+			Expect(jsonStr).To(ContainSubstring("PlayerB"))
+			Expect(jsonStr).To(ContainSubstring("PlayerC"))
+			Expect(jsonStr).To(ContainSubstring("PlayerD"))
+			Expect(jsonStr).To(ContainSubstring("PlayerE"))
+			// Should have Others bucket
+			Expect(jsonStr).To(ContainSubstring("Others"))
+			// Should NOT include small players individually
+			Expect(jsonStr).NotTo(ContainSubstring("PlayerF"))
+			Expect(jsonStr).NotTo(ContainSubstring("PlayerG"))
+			Expect(jsonStr).NotTo(ContainSubstring("PlayerH"))
 		})
 	})
 
@@ -293,7 +370,12 @@ var _ = Describe("Charts", func() {
 				Players:      map[string]uint64{"0": 10, "1": 50, "2": 30},
 				Tracks:       map[string]uint64{"0": 5, "1000": 40, "10000": 30},
 			}
+			// Insert 3 days of data (last 2 are excluded)
 			err := saveSummary(db, summary, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+			Expect(err).NotTo(HaveOccurred())
+			err = saveSummary(db, summary, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
+			Expect(err).NotTo(HaveOccurred())
+			err = saveSummary(db, summary, time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
 
 			err = exportChartsJSON(db, tempDir)

@@ -17,6 +17,14 @@ import (
 	"github.com/go-echarts/go-echarts/v2/opts"
 )
 
+// excludeRecentDays removes the last N days of data to avoid incomplete data
+func excludeRecentDays(summaries []SummaryRecord, days int) []SummaryRecord {
+	if len(summaries) <= days {
+		return nil
+	}
+	return summaries[:len(summaries)-days]
+}
+
 const (
 	chartWidth  = "1400px"
 	chartHeight = "500px"
@@ -31,6 +39,8 @@ func chartsHandler(db *sql.DB) http.HandlerFunc {
 			http.Error(w, "Failed to load data", http.StatusInternalServerError)
 			return
 		}
+		// Exclude last 2 days to avoid incomplete data
+		summaries = excludeRecentDays(summaries, 2)
 		if len(summaries) == 0 {
 			http.Error(w, "No data available", http.StatusNotFound)
 			return
@@ -213,10 +223,25 @@ func buildPlayerTypesChart(summaries []SummaryRecord) *charts.Pie {
 	}
 	latest := summaries[len(summaries)-1]
 
-	// Prepare data
+	// Calculate total count
+	var total uint64
+	for _, count := range latest.Data.PlayerTypes {
+		total += count
+	}
+
+	// Group players with less than 0.2% into "Others"
+	threshold := float64(total) * 0.002
 	var data []opts.PieData
+	var othersCount uint64
 	for playerType, count := range latest.Data.PlayerTypes {
-		data = append(data, opts.PieData{Name: playerType, Value: count})
+		if float64(count) < threshold {
+			othersCount += count
+		} else {
+			data = append(data, opts.PieData{Name: playerType, Value: count})
+		}
+	}
+	if othersCount > 0 {
+		data = append(data, opts.PieData{Name: "Others (less than 0.2%)", Value: othersCount})
 	}
 
 	// Sort data by value descending
@@ -544,6 +569,8 @@ func exportChartsJSON(db *sql.DB, outputDir string) error {
 	if err != nil {
 		return err
 	}
+	// Exclude last 2 days to avoid incomplete data
+	summaries = excludeRecentDays(summaries, 2)
 	if len(summaries) == 0 {
 		log.Print("No data to export")
 		return nil

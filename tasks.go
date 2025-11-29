@@ -30,10 +30,10 @@ func summarize(_ context.Context, db *sql.DB) func() {
 	}
 }
 
-func generateCharts(_ context.Context, db *sql.DB) func() {
+func generateCharts(_ context.Context) func() {
 	return func() {
 		log.Print("Exporting charts JSON")
-		if err := exportChartsJSON(db, chartDataDir); err != nil {
+		if err := exportChartsJSON(chartDataDir); err != nil {
 			log.Printf("Error exporting charts JSON: %v", err)
 		}
 	}

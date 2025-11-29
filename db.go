@@ -35,12 +35,6 @@ CREATE TABLE IF NOT EXISTS insights (
 	data JSONB,
 	PRIMARY KEY (id, time)
 );
-CREATE TABLE IF NOT EXISTS summary (
-    id   INTEGER   PRIMARY KEY AUTOINCREMENT,
-    time DATETIME UNIQUE,
-    data JSONB
-);
-CREATE INDEX IF NOT EXISTS idx_summary_time ON summary (time);
 `
 	_, err = db.Exec(createTableQuery)
 	if err != nil {
@@ -62,17 +56,6 @@ func saveReport(db *sql.DB, data insights.Data, t time.Time) error {
 	return err
 }
 
-func saveSummary(db *sql.DB, summary Summary, t time.Time) error {
-	summaryJSON, err := json.Marshal(summary)
-	if err != nil {
-		return err
-	}
-
-	query := `INSERT INTO summary (time, data) VALUES (?, ?) ON CONFLICT(time) DO UPDATE SET data=?`
-	_, err = db.Exec(query, t.Format("2006-01-02 15:04:05"), summaryJSON, summaryJSON)
-	return err
-}
-
 func purgeOldEntries(db *sql.DB) error {
 	// Delete entries older than 30 days
 	query := `DELETE FROM insights WHERE time < ?`
@@ -83,33 +66,4 @@ func purgeOldEntries(db *sql.DB) error {
 	deleted, _ := cnt.RowsAffected()
 	log.Printf("Deleted %d old entries\n", deleted)
 	return nil
-}
-
-type SummaryRecord struct {
-	Time time.Time
-	Data Summary
-}
-
-func getSummaries(db *sql.DB) ([]SummaryRecord, error) {
-	query := `SELECT time, data FROM summary WHERE data != '{}' ORDER BY time ASC`
-	rows, err := db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var summaries []SummaryRecord
-	for rows.Next() {
-		var t time.Time
-		var dataJSON []byte
-		if err := rows.Scan(&t, &dataJSON); err != nil {
-			return nil, err
-		}
-		var summary Summary
-		if err := json.Unmarshal(dataJSON, &summary); err != nil {
-			return nil, err
-		}
-		summaries = append(summaries, SummaryRecord{Time: t, Data: summary})
-	}
-	return summaries, rows.Err()
 }

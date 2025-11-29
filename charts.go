@@ -2,7 +2,6 @@ package main
 
 import (
 	"cmp"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -46,9 +45,9 @@ const (
 	topVersions = 15
 )
 
-func chartsHandler(db *sql.DB) http.HandlerFunc {
+func chartsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		summaries, err := getSummaries(db)
+		summaries, err := getSummaries()
 		if err != nil {
 			log.Printf("Error loading summaries: %v", err)
 			http.Error(w, "Failed to load data", http.StatusInternalServerError)
@@ -579,8 +578,8 @@ func getTopKeys(m map[string]uint64, n int) []string {
 }
 
 // exportChartsJSON generates a JSON file with all chart configurations
-func exportChartsJSON(db *sql.DB, outputDir string) error {
-	summaries, err := getSummaries(db)
+func exportChartsJSON(outputDir string) error {
+	summaries, err := getSummaries()
 	if err != nil {
 		return err
 	}

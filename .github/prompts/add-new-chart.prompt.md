@@ -77,6 +77,11 @@ chartsData := []map[string]interface{}{
 }
 ```
 
+## Step 3: Validate and adjust your changes
+
+Run the server in the background with `make dev` and verify that your new chart
+appears on the main `/` page. Use Chrome DevTools to inspect and debug any rendering issues.
+
 ## Step 3: Add Tests
 
 Add test cases for your new chart builder in `charts_test.go`.

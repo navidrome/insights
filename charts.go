@@ -39,6 +39,7 @@ func chartsHandler(db *sql.DB) http.HandlerFunc {
 		page.AddCharts(
 			buildVersionsChart(summaries),
 			buildOSChart(summaries),
+			buildPlayersChart(summaries),
 		)
 
 		w.Header().Set("Content-Type", "text/html")
@@ -190,6 +191,70 @@ func buildOSChart(summaries []SummaryRecord) *charts.Pie {
 	return pie
 }
 
+func buildPlayersChart(summaries []SummaryRecord) *charts.Line {
+	dates := make([]string, len(summaries))
+	for i, s := range summaries {
+		dates[i] = s.Time.Format("Jan 02, 2006")
+	}
+
+	line := charts.NewLine()
+	line.SetGlobalOptions(
+		charts.WithInitializationOpts(opts.Initialization{
+			Width:           chartWidth,
+			Height:          chartHeight,
+			BackgroundColor: "#ffffff",
+		}),
+		charts.WithTitleOpts(opts.Title{
+			Title:      "Number of Connected Players",
+			TitleStyle: &opts.TextStyle{Color: "#000000"},
+		}),
+		charts.WithTooltipOpts(opts.Tooltip{
+			Show:    opts.Bool(true),
+			Trigger: "axis",
+		}),
+		charts.WithLegendOpts(opts.Legend{
+			Show:      opts.Bool(true),
+			Right:     "10",
+			Orient:    "vertical",
+			TextStyle: &opts.TextStyle{Color: "#000000"},
+		}),
+		charts.WithXAxisOpts(opts.XAxis{
+			Name: "Date",
+			AxisLabel: &opts.AxisLabel{
+				Color: "#000000",
+			},
+		}),
+		charts.WithYAxisOpts(opts.YAxis{
+			Name: "Players",
+			AxisLabel: &opts.AxisLabel{
+				Color: "#000000",
+			},
+		}),
+		charts.WithGridOpts(opts.Grid{
+			Right: "280",
+		}),
+	)
+
+	line.SetXAxis(dates)
+
+	// Calculate total players for each summary
+	totalData := make([]opts.LineData, len(summaries))
+	for i, s := range summaries {
+		var total uint64
+		for _, count := range s.Data.PlayerTypes {
+			total += count
+		}
+		totalData[i] = opts.LineData{Value: total}
+	}
+	line.AddSeries("Total Players", totalData)
+
+	line.SetSeriesOptions(
+		charts.WithLineChartOpts(opts.LineChart{Smooth: opts.Bool(true)}),
+	)
+
+	return line
+}
+
 // getTopKeys returns the top N keys from a map sorted by value descending
 func getTopKeys(m map[string]uint64, n int) []string {
 	type kv struct {
@@ -238,10 +303,14 @@ func exportChartsJSON(db *sql.DB, outputDir string) error {
 	osChart := buildOSChart(summaries)
 	osChart.Validate()
 
+	playersChart := buildPlayersChart(summaries)
+	playersChart.Validate()
+
 	// Combine all charts into a single JSON array to preserve order
 	chartsData := []map[string]interface{}{
 		{"id": "versions", "options": versionsChart.JSON()},
 		{"id": "os", "options": osChart.JSON()},
+		{"id": "players", "options": playersChart.JSON()},
 	}
 
 	// Marshal to JSON

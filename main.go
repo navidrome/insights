@@ -17,8 +17,13 @@ import (
 
 func startTasks(ctx context.Context, db *sql.DB) error {
 	c := cron.New(cron.WithLocation(time.UTC))
-	// Run summarize every day at midnight UTC
-	_, err := c.AddFunc("0 0 * * *", summarize(ctx, db))
+	// Run summarize every 2 hours
+	_, err := c.AddFunc("0 */2 * * *", summarize(ctx, db))
+	if err != nil {
+		return err
+	}
+	// Generate charts JSON once a day at 00:00 UTC
+	_, err = c.AddFunc("0 0 * * *", generateCharts(ctx, db))
 	if err != nil {
 		return err
 	}
@@ -44,6 +49,7 @@ func main() {
 	}
 
 	go summarize(ctx, db)()
+	go generateCharts(ctx, db)()
 
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)

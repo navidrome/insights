@@ -72,11 +72,11 @@ func buildVersionsChart(summaries []SummaryRecord) *charts.Line {
 		charts.WithInitializationOpts(opts.Initialization{
 			Width:           chartWidth,
 			Height:          chartHeight,
-			BackgroundColor: "#1a1a1a",
+			BackgroundColor: "#ffffff",
 		}),
 		charts.WithTitleOpts(opts.Title{
 			Title:      "Number of Navidrome Installations",
-			TitleStyle: &opts.TextStyle{Color: "#ffffff"},
+			TitleStyle: &opts.TextStyle{Color: "#000000"},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
 			Show:    opts.Bool(true),
@@ -86,18 +86,18 @@ func buildVersionsChart(summaries []SummaryRecord) *charts.Line {
 			Show:      opts.Bool(true),
 			Right:     "10",
 			Orient:    "vertical",
-			TextStyle: &opts.TextStyle{Color: "#ffffff"},
+			TextStyle: &opts.TextStyle{Color: "#000000"},
 		}),
 		charts.WithXAxisOpts(opts.XAxis{
 			Name: "Date",
 			AxisLabel: &opts.AxisLabel{
-				Color: "#ffffff",
+				Color: "#000000",
 			},
 		}),
 		charts.WithYAxisOpts(opts.YAxis{
 			Name: "Installations",
 			AxisLabel: &opts.AxisLabel{
-				Color: "#ffffff",
+				Color: "#000000",
 			},
 		}),
 		charts.WithGridOpts(opts.Grid{
@@ -153,11 +153,11 @@ func buildOSChart(summaries []SummaryRecord) *charts.Pie {
 		charts.WithInitializationOpts(opts.Initialization{
 			Width:           chartWidth,
 			Height:          chartHeight,
-			BackgroundColor: "#1a1a1a",
+			BackgroundColor: "#ffffff",
 		}),
 		charts.WithTitleOpts(opts.Title{
 			Title:      "Operating systems and architectures",
-			TitleStyle: &opts.TextStyle{Color: "#ffffff"},
+			TitleStyle: &opts.TextStyle{Color: "#000000"},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
 			Show:      opts.Bool(true),
@@ -168,7 +168,7 @@ func buildOSChart(summaries []SummaryRecord) *charts.Pie {
 			Show:      opts.Bool(true),
 			Right:     "10",
 			Orient:    "vertical",
-			TextStyle: &opts.TextStyle{Color: "#ffffff"},
+			TextStyle: &opts.TextStyle{Color: "#000000"},
 			Type:      "scroll",
 		}),
 	)

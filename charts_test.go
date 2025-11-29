@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,16 +13,22 @@ import (
 )
 
 var _ = Describe("Charts", func() {
-	var db *sql.DB
+	var tempDir string
+	var originalDataFolder string
 
 	BeforeEach(func() {
 		var err error
-		db, err = openDB(":memory:")
+		tempDir, err = os.MkdirTemp("", "charts-test")
 		Expect(err).NotTo(HaveOccurred())
+
+		// Set DATA_FOLDER to temp directory for tests
+		originalDataFolder = os.Getenv("DATA_FOLDER")
+		os.Setenv("DATA_FOLDER", tempDir)
 	})
 
 	AfterEach(func() {
-		db.Close()
+		os.RemoveAll(tempDir)
+		os.Setenv("DATA_FOLDER", originalDataFolder)
 	})
 
 	Describe("excludeIncompleteDays", func() {
@@ -64,7 +69,7 @@ var _ = Describe("Charts", func() {
 
 	Describe("getSummaries", func() {
 		It("returns empty slice when no summaries exist", func() {
-			summaries, err := getSummaries(db)
+			summaries, err := getSummaries()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(summaries).To(BeEmpty())
 		})
@@ -74,12 +79,12 @@ var _ = Describe("Charts", func() {
 			summary1 := Summary{NumInstances: 100, Versions: map[string]uint64{"0.54.0": 50, "0.54.1": 50}}
 			summary2 := Summary{NumInstances: 150, Versions: map[string]uint64{"0.54.0": 60, "0.54.1": 90}}
 
-			err := saveSummary(db, summary1, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+			err := saveSummary(summary1, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
-			err = saveSummary(db, summary2, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
+			err = saveSummary(summary2, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
 
-			summaries, err := getSummaries(db)
+			summaries, err := getSummaries()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(summaries).To(HaveLen(2))
 			Expect(summaries[0].Time.Day()).To(Equal(1))
@@ -88,20 +93,19 @@ var _ = Describe("Charts", func() {
 			Expect(summaries[1].Data.NumInstances).To(Equal(int64(150)))
 		})
 
-		It("skips empty summaries where data is empty JSON object", func() {
+		It("skips empty summaries where NumInstances is 0", func() {
 			summary1 := Summary{NumInstances: 100, Versions: map[string]uint64{"0.54.0": 100}}
-			// Empty summary will be stored as '{}' - we simulate by inserting directly
+			summary2 := Summary{NumInstances: 0} // Empty summary
 			summary3 := Summary{NumInstances: 200, Versions: map[string]uint64{"0.54.0": 200}}
 
-			err := saveSummary(db, summary1, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+			err := saveSummary(summary1, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
-			// Insert empty JSON directly to simulate real empty summary
-			_, err = db.Exec(`INSERT INTO summary (time, data) VALUES (?, '{}')`, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
+			err = saveSummary(summary2, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
-			err = saveSummary(db, summary3, time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC))
+			err = saveSummary(summary3, time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
 
-			summaries, err := getSummaries(db)
+			summaries, err := getSummaries()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(summaries).To(HaveLen(2))
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(100)))
@@ -111,7 +115,7 @@ var _ = Describe("Charts", func() {
 
 	Describe("chartsHandler", func() {
 		It("returns 404 when no data available", func() {
-			handler := chartsHandler(db)
+			handler := chartsHandler()
 			req := httptest.NewRequest(http.MethodGet, "/charts", nil)
 			w := httptest.NewRecorder()
 
@@ -129,14 +133,14 @@ var _ = Describe("Charts", func() {
 				Tracks:       map[string]uint64{"0": 5, "1000": 40, "10000": 30},
 			}
 			// Insert 3 days of data (last 2 are excluded)
-			err := saveSummary(db, summary, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+			err := saveSummary(summary, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
-			err = saveSummary(db, summary, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
+			err = saveSummary(summary, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
-			err = saveSummary(db, summary, time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC))
+			err = saveSummary(summary, time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
 
-			handler := chartsHandler(db)
+			handler := chartsHandler()
 			req := httptest.NewRequest(http.MethodGet, "/charts", nil)
 			w := httptest.NewRecorder()
 
@@ -375,24 +379,24 @@ var _ = Describe("Charts", func() {
 	})
 
 	Describe("exportChartsJSON", func() {
-		var tempDir string
+		var outputDir string
 
 		BeforeEach(func() {
 			var err error
-			tempDir, err = os.MkdirTemp("", "charts-test")
+			outputDir, err = os.MkdirTemp("", "charts-output")
 			Expect(err).NotTo(HaveOccurred())
 		})
 
 		AfterEach(func() {
-			os.RemoveAll(tempDir)
+			os.RemoveAll(outputDir)
 		})
 
 		It("does nothing when no summaries exist", func() {
-			err := exportChartsJSON(db, tempDir)
+			err := exportChartsJSON(outputDir)
 			Expect(err).NotTo(HaveOccurred())
 
 			// File should not be created
-			_, err = os.Stat(filepath.Join(tempDir, "charts.json"))
+			_, err = os.Stat(filepath.Join(outputDir, "charts.json"))
 			Expect(os.IsNotExist(err)).To(BeTrue())
 		})
 
@@ -405,19 +409,19 @@ var _ = Describe("Charts", func() {
 				Players:      map[string]uint64{"0": 10, "1": 50, "2": 30},
 				Tracks:       map[string]uint64{"0": 5, "1000": 40, "10000": 30},
 			}
-			// Insert 3 days of data (last 2 are excluded)
-			err := saveSummary(db, summary, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+			// Insert 3 days of data
+			err := saveSummary(summary, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
-			err = saveSummary(db, summary, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
+			err = saveSummary(summary, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
-			err = saveSummary(db, summary, time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC))
+			err = saveSummary(summary, time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
 
-			err = exportChartsJSON(db, tempDir)
+			err = exportChartsJSON(outputDir)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify file exists
-			jsonPath := filepath.Join(tempDir, "charts.json")
+			jsonPath := filepath.Join(outputDir, "charts.json")
 			data, err := os.ReadFile(jsonPath)
 			Expect(err).NotTo(HaveOccurred())
 

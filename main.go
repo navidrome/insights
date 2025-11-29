@@ -23,11 +23,11 @@ func startTasks(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	// Generate charts JSON once a day at 00:00 UTC
-	_, err = c.AddFunc("0 0 * * *", generateCharts(ctx, db))
+	_, err = c.AddFunc("5 0 * * *", generateCharts(ctx))
 	if err != nil {
 		return err
 	}
-	_, err = c.AddFunc("5 0 * * *", cleanup(ctx, db))
+	_, err = c.AddFunc("30 0 * * *", cleanup(ctx, db))
 	if err != nil {
 		return err
 	}
@@ -49,7 +49,7 @@ func main() {
 	}
 
 	go summarize(ctx, db)()
-	go generateCharts(ctx, db)()
+	go generateCharts(ctx)()
 
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
@@ -62,7 +62,7 @@ func main() {
 	})
 
 	// Charts endpoint (no rate limiting) - legacy, renders server-side
-	r.Get("/charts", chartsHandler(db))
+	r.Get("/charts", chartsHandler())
 
 	// Rate-limited collect endpoint
 	limiter := httprate.NewRateLimiter(1, 30*time.Minute, httprate.WithKeyByIP())

@@ -82,8 +82,8 @@ func summarizeData(db *sql.DB, date time.Time) error {
 	variance := float64(sumTracksSquared)/float64(numInstances) - mean*mean
 	summary.LibSizeStdDev = math.Sqrt(variance)
 
-	// Save summary to database
-	err = saveSummary(db, summary, date)
+	// Save summary to file
+	err = saveSummary(summary, date)
 	if err != nil {
 		log.Printf("Error saving summary: %s", err)
 	}

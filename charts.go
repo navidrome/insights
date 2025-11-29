@@ -2,8 +2,11 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 
@@ -215,4 +218,49 @@ func getTopKeys(m map[string]uint64, n int) []string {
 		result[i] = pairs[i].Key
 	}
 	return result
+}
+
+// exportChartsJSON generates a JSON file with all chart configurations
+func exportChartsJSON(db *sql.DB, outputDir string) error {
+	summaries, err := getSummaries(db)
+	if err != nil {
+		return err
+	}
+	if len(summaries) == 0 {
+		log.Print("No data to export")
+		return nil
+	}
+
+	// Build all charts
+	versionsChart := buildVersionsChart(summaries)
+	versionsChart.Validate()
+
+	osChart := buildOSChart(summaries)
+	osChart.Validate()
+
+	// Combine all charts into a single JSON object
+	chartsData := map[string]interface{}{
+		"versions": versionsChart.JSON(),
+		"os":       osChart.JSON(),
+	}
+
+	// Marshal to JSON
+	jsonData, err := json.MarshalIndent(chartsData, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	// Ensure output directory exists
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return err
+	}
+
+	// Write to file
+	outputPath := filepath.Join(outputDir, "charts.json")
+	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+		return err
+	}
+
+	log.Printf("Exported charts to %s", outputPath)
+	return nil
 }

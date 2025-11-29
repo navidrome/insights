@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const chartDataDir = "web/chartdata"
+
 func cleanup(_ context.Context, db *sql.DB) func() {
 	return func() {
 		log.Print("Cleaning old data")
@@ -22,6 +24,12 @@ func summarize(_ context.Context, db *sql.DB) func() {
 			date := now.Add(-time.Duration(d) * 24 * time.Hour)
 			log.Print("Summarizing data for ", date.Format("2006-01-02"))
 			_ = summarizeData(db, date)
+		}
+
+		// Export charts JSON after summarization
+		log.Print("Exporting charts JSON")
+		if err := exportChartsJSON(db, chartDataDir); err != nil {
+			log.Printf("Error exporting charts JSON: %v", err)
 		}
 	}
 }

@@ -111,6 +111,7 @@ type insightsOS struct {
 	Containerized bool   `json:"containerized"`
 	Arch          string `json:"arch"`
 	NumCPU        int    `json:"numCPU"`
+	Package       string `json:"package,omitempty"`
 }
 
 type insightsLibrary struct {
@@ -120,6 +121,7 @@ type insightsLibrary struct {
 	Playlists     int64            `json:"playlists"`
 	Shares        int64            `json:"shares"`
 	Radios        int64            `json:"radios"`
+	Libraries     int64            `json:"libraries"`
 	ActiveUsers   int64            `json:"activeUsers"`
 	ActivePlayers map[string]int64 `json:"activePlayers,omitempty"`
 }

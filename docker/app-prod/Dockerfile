@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/golang:1.23 AS build
+FROM public.ecr.aws/docker/library/golang:1.24 AS build
 
 WORKDIR /workspace
 RUN --mount=type=bind,source=. \

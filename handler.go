@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/navidrome/navidrome/core/metrics/insights"
 )
@@ -25,7 +26,7 @@ func handler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		err = saveToDB(db, data)
+		err = saveReport(db, data, time.Now())
 		if err != nil {
 			log.Printf("Error handling request: %s", err.Error())
 			w.WriteHeader(http.StatusInternalServerError)

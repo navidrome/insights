@@ -176,6 +176,15 @@ var fsMappings = map[string]string{
 	"unknown(0xff534d42)": "cifs",
 	"unknown(0x786f4256)": "vboxsf",
 	"unknown(0xf2f52010)": "f2fs",
+	"unknown(0x5346544e)": "ntfs",     // NTFS_SB_MAGIC
+	"unknown(0x482b)":     "hfs+",     // HFS Plus (Apple)
+	"unknown(0xca451a4e)": "virtiofs", // VirtIO filesystem (VMs/containers)
+	"unknown(0x187)":      "autofs",   // Automount filesystem
+	// Signed/unsigned conversion issues (negative hex values converted to uint32)
+	"unknown(0x-6edc97c2)": "btrfs", // 0x9123683e
+	"unknown(0x-1acb2be)":  "smb2",  // 0xfe534d42
+	"unknown(0x-acb2be)":   "cifs",  // 0xff534d42
+	"unknown(0x-d0adff0)":  "f2fs",  // 0xf2f52010
 }
 
 func mapFS(fs *insights.FSInfo) string {

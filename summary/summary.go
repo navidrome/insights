@@ -1,16 +1,15 @@
-package main
+package summary
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"iter"
 	"log"
 	"math"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/navidrome/insights/db"
 	"github.com/navidrome/navidrome/core/metrics/insights"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -32,8 +31,8 @@ type Summary struct {
 	LibSizeStdDev  float64           `json:"libSizeStdDev,omitempty"`
 }
 
-func summarizeData(db *sql.DB, date time.Time) error {
-	rows, err := selectData(db, date)
+func SummarizeData(dbConn *sql.DB, date time.Time) error {
+	rows, err := db.SelectData(dbConn, date)
 	if err != nil {
 		log.Printf("Error selecting data: %s", err)
 		return err
@@ -66,7 +65,7 @@ func summarizeData(db *sql.DB, date time.Time) error {
 		summary.DataFS[mapFS(data.FS.Data)]++
 		totalPlayers := mapPlayerTypes(data, summary.PlayerTypes)
 		summary.Players[fmt.Sprintf("%d", totalPlayers)]++
-		mapToBins(data.Library.Tracks, trackBins, summary.Tracks)
+		mapToBins(data.Library.Tracks, TrackBins, summary.Tracks)
 		if data.Library.Tracks > 0 {
 			sumTracks += data.Library.Tracks
 			sumTracksSquared += data.Library.Tracks * data.Library.Tracks
@@ -83,7 +82,7 @@ func summarizeData(db *sql.DB, date time.Time) error {
 	summary.LibSizeStdDev = math.Sqrt(variance)
 
 	// Save summary to file
-	err = saveSummary(summary, date)
+	err = SaveSummary(summary, date)
 	if err != nil {
 		log.Printf("Error saving summary: %s", err)
 	}
@@ -97,7 +96,7 @@ func mapVersion(data insights.Data) string {
 	return versionRegex.ReplaceAllString(data.Version, "($1)")
 }
 
-var trackBins = []int64{0, 1, 100, 500, 1000, 5000, 10000, 20000, 50000, 100000, 500000, 1000000}
+var TrackBins = []int64{0, 1, 100, 500, 1000, 5000, 10000, 20000, 50000, 100000, 500000, 1000000}
 
 func mapToBins(count int64, bins []int64, counters map[string]uint64) {
 	for i := range bins {
@@ -112,7 +111,7 @@ func mapToBins(count int64, bins []int64, counters map[string]uint64) {
 var caser = cases.Title(language.Und)
 
 func mapOS(data insights.Data) string {
-	os := func() string {
+	osName := func() string {
 		switch data.OS.Type {
 		case "darwin":
 			return "macOS"
@@ -126,7 +125,7 @@ func mapOS(data insights.Data) string {
 			return strings.Replace(s, "bsd", "BSD", -1)
 		}
 	}()
-	return os + " - " + data.OS.Arch
+	return osName + " - " + data.OS.Arch
 }
 
 var playersTypes = map[*regexp.Regexp]string{
@@ -187,45 +186,4 @@ func mapFS(fs *insights.FSInfo) string {
 		return t
 	}
 	return strings.ToLower(fs.Type)
-}
-
-func selectData(db *sql.DB, date time.Time) (iter.Seq[insights.Data], error) {
-	query := `
-SELECT i1.id, i1.time, i1.data
-FROM insights i1
-INNER JOIN (
-    SELECT id, MAX(time) as max_time
-    FROM insights
-    WHERE time >= date(?) AND time < date(?, '+1 day')
-    GROUP BY id
-) i2 ON i1.id = i2.id AND i1.time = i2.max_time
-WHERE i1.time >= date(?) AND time < date(?, '+1 day')
-ORDER BY i1.id, i1.time DESC;`
-	d := date.Format("2006-01-02")
-	rows, err := db.Query(query, d, d, d, d)
-	if err != nil {
-		return nil, fmt.Errorf("querying data: %w", err)
-	}
-	return func(yield func(insights.Data) bool) {
-		defer rows.Close()
-		for rows.Next() {
-			var j string
-			var id string
-			var t time.Time
-			err := rows.Scan(&id, &t, &j)
-			if err != nil {
-				log.Printf("Error scanning row: %s", err)
-				return
-			}
-			var data insights.Data
-			err = json.Unmarshal([]byte(j), &data)
-			if err != nil {
-				log.Printf("Error unmarshalling data: %s", err)
-				return
-			}
-			if !yield(data) {
-				return
-			}
-		}
-	}, nil
 }

@@ -1,4 +1,4 @@
-package main
+package summary
 
 import (
 	"encoding/json"
@@ -18,7 +18,7 @@ type SummaryRecord struct {
 	Data Summary
 }
 
-func summaryFilePath(t time.Time) string {
+func SummaryFilePath(t time.Time) string {
 	dataFolder := os.Getenv("DATA_FOLDER")
 	return filepath.Join(
 		dataFolder,
@@ -29,8 +29,8 @@ func summaryFilePath(t time.Time) string {
 	)
 }
 
-func saveSummary(summary Summary, t time.Time) error {
-	filePath := summaryFilePath(t)
+func SaveSummary(summary Summary, t time.Time) error {
+	filePath := SummaryFilePath(t)
 
 	// Create directory structure if needed
 	dir := filepath.Dir(filePath)
@@ -50,7 +50,7 @@ func saveSummary(summary Summary, t time.Time) error {
 // summaryFileRegex matches files like "summary-2025-11-29.json"
 var summaryFileRegex = regexp.MustCompile(`^summary-(\d{4}-\d{2}-\d{2})\.json$`)
 
-func getSummaries() ([]SummaryRecord, error) {
+func GetSummaries() ([]SummaryRecord, error) {
 	dataFolder := os.Getenv("DATA_FOLDER")
 	baseDir := filepath.Join(dataFolder, summariesDir)
 

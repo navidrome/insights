@@ -1,4 +1,4 @@
-package main
+package summary
 
 import (
 	"maps"
@@ -12,7 +12,7 @@ import (
 
 func TestSummary(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Insights Suite")
+	RunSpecs(t, "Summary Suite")
 }
 
 var _ = Describe("Summary", func() {

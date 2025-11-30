@@ -1,4 +1,4 @@
-package main
+package charts
 
 import (
 	"cmp"
@@ -14,11 +14,12 @@ import (
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/components"
 	"github.com/go-echarts/go-echarts/v2/opts"
+	"github.com/navidrome/insights/summary"
 )
 
-// excludeIncompleteDays removes any trailing days when the instance count drops significantly
+// ExcludeIncompleteDays removes any trailing days when the instance count drops significantly
 // (more than 20% drop) compared to the previous day, as this indicates incomplete data.
-func excludeIncompleteDays(summaries []SummaryRecord) []SummaryRecord {
+func ExcludeIncompleteDays(summaries []summary.SummaryRecord) []summary.SummaryRecord {
 	if len(summaries) == 0 {
 		return nil
 	}
@@ -45,16 +46,16 @@ const (
 	topVersions = 15
 )
 
-func chartsHandler() http.HandlerFunc {
+func ChartsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		summaries, err := getSummaries()
+		summaries, err := summary.GetSummaries()
 		if err != nil {
 			log.Printf("Error loading summaries: %v", err)
 			http.Error(w, "Failed to load data", http.StatusInternalServerError)
 			return
 		}
 		// Exclude incomplete days (significant drops indicate incomplete data)
-		summaries = excludeIncompleteDays(summaries)
+		summaries = ExcludeIncompleteDays(summaries)
 		if len(summaries) == 0 {
 			http.Error(w, "No data available", http.StatusNotFound)
 			return
@@ -76,7 +77,7 @@ func chartsHandler() http.HandlerFunc {
 	}
 }
 
-func buildVersionsChart(summaries []SummaryRecord) *charts.Line {
+func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 	// Build X-axis dates
 	dates := make([]string, len(summaries))
 	for i, s := range summaries {
@@ -175,7 +176,7 @@ func buildVersionsChart(summaries []SummaryRecord) *charts.Line {
 	return line
 }
 
-func buildOSChart(summaries []SummaryRecord) *charts.Pie {
+func buildOSChart(summaries []summary.SummaryRecord) *charts.Pie {
 	if len(summaries) == 0 {
 		return nil
 	}
@@ -231,7 +232,7 @@ func buildOSChart(summaries []SummaryRecord) *charts.Pie {
 	return pie
 }
 
-func buildPlayerTypesChart(summaries []SummaryRecord) *charts.Pie {
+func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
 	if len(summaries) == 0 {
 		return nil
 	}
@@ -302,7 +303,7 @@ func buildPlayerTypesChart(summaries []SummaryRecord) *charts.Pie {
 	return pie
 }
 
-func buildPlayersChart(summaries []SummaryRecord) *charts.Line {
+func buildPlayersChart(summaries []summary.SummaryRecord) *charts.Line {
 	dates := make([]string, len(summaries))
 	for i, s := range summaries {
 		dates[i] = s.Time.Format("Jan 02, 2006")
@@ -369,7 +370,7 @@ func buildPlayersChart(summaries []SummaryRecord) *charts.Line {
 	return line
 }
 
-func buildPlayersPerInstallationChart(summaries []SummaryRecord) *charts.Bar {
+func buildPlayersPerInstallationChart(summaries []summary.SummaryRecord) *charts.Bar {
 	if len(summaries) == 0 {
 		return nil
 	}
@@ -466,7 +467,7 @@ var trackBinLabels = []string{
 	"100,001-500,000", "500,001-1,000,000", ">1,000,001",
 }
 
-func buildTracksChart(summaries []SummaryRecord) *charts.Bar {
+func buildTracksChart(summaries []summary.SummaryRecord) *charts.Bar {
 	if len(summaries) == 0 {
 		return nil
 	}
@@ -577,14 +578,14 @@ func getTopKeys(m map[string]uint64, n int) []string {
 	return result
 }
 
-// exportChartsJSON generates a JSON file with all chart configurations
-func exportChartsJSON(outputDir string) error {
-	summaries, err := getSummaries()
+// ExportChartsJSON generates a JSON file with all chart configurations
+func ExportChartsJSON(outputDir string) error {
+	summaries, err := summary.GetSummaries()
 	if err != nil {
 		return err
 	}
 	// Exclude incomplete days (significant drops indicate incomplete data)
-	summaries = excludeIncompleteDays(summaries)
+	summaries = ExcludeIncompleteDays(summaries)
 	if len(summaries) == 0 {
 		log.Print("No data to export")
 		return nil

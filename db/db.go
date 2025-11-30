@@ -1,9 +1,10 @@
-package main
+package db
 
 import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"log"
 	"net/url"
 	"time"
@@ -12,7 +13,7 @@ import (
 	"github.com/navidrome/navidrome/core/metrics/insights"
 )
 
-func openDB(fileName string) (*sql.DB, error) {
+func OpenDB(fileName string) (*sql.DB, error) {
 	params := url.Values{
 		"_journal_mode": []string{"WAL"},
 		"_synchronous":  []string{"NORMAL"},
@@ -46,7 +47,7 @@ CREATE INDEX IF NOT EXISTS insights_time ON insights(time);
 	return db, nil
 }
 
-func saveReport(db *sql.DB, data insights.Data, t time.Time) error {
+func SaveReport(db *sql.DB, data insights.Data, t time.Time) error {
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
 		return err
@@ -57,7 +58,7 @@ func saveReport(db *sql.DB, data insights.Data, t time.Time) error {
 	return err
 }
 
-func purgeOldEntries(db *sql.DB) error {
+func PurgeOldEntries(db *sql.DB) error {
 	// Delete entries older than 30 days
 	query := `DELETE FROM insights WHERE time < ?`
 	cnt, err := db.Exec(query, time.Now().Add(-30*24*time.Hour))
@@ -67,4 +68,45 @@ func purgeOldEntries(db *sql.DB) error {
 	deleted, _ := cnt.RowsAffected()
 	log.Printf("Deleted %d old entries\n", deleted)
 	return nil
+}
+
+func SelectData(db *sql.DB, date time.Time) (iter.Seq[insights.Data], error) {
+	query := `
+SELECT i1.id, i1.time, i1.data
+FROM insights i1
+INNER JOIN (
+    SELECT id, MAX(time) as max_time
+    FROM insights
+    WHERE time >= date(?) AND time < date(?, '+1 day')
+    GROUP BY id
+) i2 ON i1.id = i2.id AND i1.time = i2.max_time
+WHERE i1.time >= date(?) AND time < date(?, '+1 day')
+ORDER BY i1.id, i1.time DESC;`
+	d := date.Format("2006-01-02")
+	rows, err := db.Query(query, d, d, d, d)
+	if err != nil {
+		return nil, fmt.Errorf("querying data: %w", err)
+	}
+	return func(yield func(insights.Data) bool) {
+		defer rows.Close()
+		for rows.Next() {
+			var j string
+			var id string
+			var t time.Time
+			err := rows.Scan(&id, &t, &j)
+			if err != nil {
+				log.Printf("Error scanning row: %s", err)
+				return
+			}
+			var data insights.Data
+			err = json.Unmarshal([]byte(j), &data)
+			if err != nil {
+				log.Printf("Error unmarshalling data: %s", err)
+				return
+			}
+			if !yield(data) {
+				return
+			}
+		}
+	}, nil
 }

@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS insights (
 	data JSONB,
 	PRIMARY KEY (id, time)
 );
+CREATE INDEX IF NOT EXISTS insights_time ON insights(time);
 `
 	_, err = db.Exec(createTableQuery)
 	if err != nil {

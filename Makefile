@@ -15,3 +15,10 @@ linux:
 	docker buildx build --platform linux/amd64 --target binary --output binary docker/app-prod
 .PHONY: linux
 
+consolidate:
+	@if [ -z "$(BACKUPS)" ] || [ -z "$(DEST)" ]; then \
+		echo "Usage: make consolidate BACKUPS=<path-to-backups> DEST=<destination-folder>"; \
+		exit 1; \
+	fi
+	go run ./cmd/consolidate -backups "$(BACKUPS)" -dest "$(DEST)"
+.PHONY: consolidate

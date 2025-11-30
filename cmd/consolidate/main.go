@@ -55,6 +55,16 @@ func run(backupsPath, destPath string) error {
 	}
 	defer destDB.Close()
 
+	// Apply bulk import optimizations
+	if err := applyBulkPragmas(destDB); err != nil {
+		return fmt.Errorf("applying bulk pragmas: %w", err)
+	}
+
+	// Drop index for faster inserts
+	if err := dropIndex(destDB); err != nil {
+		return fmt.Errorf("dropping index: %w", err)
+	}
+
 	// Find all backup zip files
 	zipFiles, err := findBackupZips(backupsPath)
 	if err != nil {
@@ -78,6 +88,11 @@ func run(backupsPath, destPath string) error {
 		totalImported += imported
 	}
 	log.Printf("Total rows imported: %d", totalImported)
+
+	// Recreate index after all imports
+	if err := recreateIndex(destDB); err != nil {
+		return fmt.Errorf("recreating index: %w", err)
+	}
 
 	// Generate summaries for all dates in the consolidated database
 	if err := generateAllSummaries(destDB); err != nil {
@@ -194,15 +209,42 @@ func extractFile(f *zip.File, destPath string) error {
 	return err
 }
 
-const batchSize = 30000
+const (
+	batchSize       = 30000 // rows to collect before flushing to DB
+	insertBatchSize = 5000  // rows per multi-value INSERT statement
+)
+
+type row struct{ id, t, data string }
+
+func applyBulkPragmas(db *sql.DB) error {
+	pragmas := []string{
+		"PRAGMA page_size = 32768",
+		"PRAGMA synchronous = OFF",
+		"PRAGMA journal_mode = OFF",
+		"PRAGMA locking_mode = EXCLUSIVE",
+		"PRAGMA temp_store = MEMORY",
+	}
+	for _, p := range pragmas {
+		if _, err := db.Exec(p); err != nil {
+			return fmt.Errorf("executing %s: %w", p, err)
+		}
+	}
+	return nil
+}
+
+func dropIndex(db *sql.DB) error {
+	log.Printf("Dropping index for faster imports...")
+	_, err := db.Exec("DROP INDEX IF EXISTS insights_time")
+	return err
+}
+
+func recreateIndex(db *sql.DB) error {
+	log.Printf("Recreating index...")
+	_, err := db.Exec("CREATE INDEX IF NOT EXISTS insights_time ON insights(time)")
+	return err
+}
 
 func importData(srcDB, destDB *sql.DB) (int64, error) {
-	// Optimize for bulk import - disable sync for speed (data is recoverable from backups)
-	if _, err := destDB.Exec("PRAGMA synchronous = OFF"); err != nil {
-		return 0, fmt.Errorf("setting synchronous off: %w", err)
-	}
-	defer destDB.Exec("PRAGMA synchronous = NORMAL")
-
 	// Query all data from source
 	rows, err := srcDB.Query("SELECT id, time, data FROM insights")
 	if err != nil {
@@ -211,15 +253,15 @@ func importData(srcDB, destDB *sql.DB) (int64, error) {
 	defer rows.Close()
 
 	var totalImported int64
-	var batch []struct{ id, t, data string }
+	var batch []row
 
 	for rows.Next() {
-		var id, data, t string
-		if err := rows.Scan(&id, &t, &data); err != nil {
+		var r row
+		if err := rows.Scan(&r.id, &r.t, &r.data); err != nil {
 			log.Printf("Warning: error scanning row: %v", err)
 			continue
 		}
-		batch = append(batch, struct{ id, t, data string }{id, t, data})
+		batch = append(batch, r)
 
 		if len(batch) >= batchSize {
 			imported, err := insertBatch(destDB, batch)
@@ -243,34 +285,55 @@ func importData(srcDB, destDB *sql.DB) (int64, error) {
 	return totalImported, rows.Err()
 }
 
-func insertBatch(db *sql.DB, batch []struct{ id, t, data string }) (int64, error) {
+// buildMultiInsertSQL builds a multi-value INSERT statement for n rows
+func buildMultiInsertSQL(n int) string {
+	var sb strings.Builder
+	sb.WriteString("INSERT OR IGNORE INTO insights (id, time, data) VALUES ")
+	for i := range n {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString("(?,?,?)")
+	}
+	return sb.String()
+}
+
+func insertBatch(db *sql.DB, batch []row) (int64, error) {
+	if len(batch) == 0 {
+		return 0, nil
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare("INSERT OR IGNORE INTO insights (id, time, data) VALUES (?, ?, ?)")
-	if err != nil {
-		return 0, fmt.Errorf("preparing insert statement: %w", err)
-	}
-	defer stmt.Close()
+	var totalImported int64
 
-	var imported int64
-	for _, row := range batch {
-		result, err := stmt.Exec(row.id, row.t, row.data)
+	// Process in chunks of insertBatchSize using multi-value INSERT
+	for i := 0; i < len(batch); i += insertBatchSize {
+		end := min(i+insertBatchSize, len(batch))
+		chunk := batch[i:end]
+
+		query := buildMultiInsertSQL(len(chunk))
+		args := make([]any, 0, len(chunk)*3)
+		for _, r := range chunk {
+			args = append(args, r.id, r.t, r.data)
+		}
+
+		result, err := tx.Exec(query, args...)
 		if err != nil {
-			log.Printf("Warning: error inserting row: %v", err)
-			continue
+			return totalImported, fmt.Errorf("executing batch insert: %w", err)
 		}
 		affected, _ := result.RowsAffected()
-		imported += affected
+		totalImported += affected
 	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing transaction: %w", err)
 	}
-	return imported, nil
+	return totalImported, nil
 }
 
 func generateAllSummaries(db *sql.DB) error {

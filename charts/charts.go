@@ -159,6 +159,12 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 	}
 	line.AddSeries("All", allData)
 
+	// Create a set of top versions for quick lookup
+	topVersionsSet := make(map[string]bool)
+	for _, v := range topVersionsList {
+		topVersionsSet[v] = true
+	}
+
 	// Add series for each version
 	for _, version := range topVersionsList {
 		data := make([]opts.LineData, len(summaries))
@@ -168,6 +174,19 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 		}
 		line.AddSeries(version, data)
 	}
+
+	// Add "Others" series for versions not in top list
+	othersData := make([]opts.LineData, len(summaries))
+	for i, s := range summaries {
+		var othersCount uint64
+		for version, count := range s.Data.Versions {
+			if !topVersionsSet[version] {
+				othersCount += count
+			}
+		}
+		othersData[i] = opts.LineData{Value: othersCount}
+	}
+	line.AddSeries("Others", othersData)
 
 	line.SetSeriesOptions(
 		charts.WithLineChartOpts(opts.LineChart{Smooth: opts.Bool(true)}),
@@ -559,13 +578,7 @@ func getTopKeys(m map[string]uint64, n int) []string {
 		pairs = append(pairs, kv{k, v})
 	}
 	slices.SortFunc(pairs, func(a, b kv) int {
-		if a.Value > b.Value {
-			return -1
-		}
-		if a.Value < b.Value {
-			return 1
-		}
-		return 0
+		return cmp.Compare(b.Value, a.Value)
 	})
 
 	if n > len(pairs) {

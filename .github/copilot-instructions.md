@@ -1,102 +1,91 @@
 # Navidrome Insights Server
 
-A lightweight Go service that collects anonymous usage metrics from Navidrome instances and generates aggregated summaries with visualizations.
+Go service collecting anonymous usage metrics from Navidrome instances, generating aggregated summaries and visualizations.
 
 ## Architecture
 
 ```
-main.go          → Entry point: HTTP server setup, cron tasks registration
-handler.go       → POST /collect endpoint, receives insights.Data from Navidrome
-db.go            → SQLite operations (openDB, saveReport, purgeOldEntries)
-summary.go       → Data aggregation logic (summarizeData, mapping functions)
-summary_store.go → File-based summary persistence (JSON files in summaries/)
-charts.go        → Chart generation using go-echarts (line, pie, bar charts)
-tasks.go         → Cron job wrappers (summarize, generateCharts, cleanup)
+cmd/server/       → HTTP server (main.go), /collect endpoint (handler.go), cron tasks (tasks.go)
+db/               → SQLite operations (openDB, saveReport, selectData, purgeOldEntries)
+summary/          → Aggregation logic (summary.go) and file storage (store.go)
+charts/           → Chart generation using go-echarts, exports to JSON
+cmd/consolidate/  → CLI tool to merge historical backup DBs into one
+web/              → Static frontend (index.html consumes chartdata/charts.json)
 ```
 
 ### Data Flow
 
-1. Navidrome instances POST JSON to `/collect` (rate-limited: 1 req/30min per IP)
-2. Raw data stored in SQLite `insights` table with instance ID and timestamp
-3. Every 2 hours: `summarizeData()` aggregates last 10 days → JSON files in `summaries/YYYY/MM/`
-4. Daily at 00:05 UTC: `exportChartsJSON()` generates `web/chartdata/charts.json` for frontend
-5. Daily at 00:30 UTC: `purgeOldEntries()` removes entries older than 30 days
+1. Navidrome POSTs to `/collect` (rate-limited: 1 req/30min per IP) → stored in SQLite
+2. Cron every 2h: `summary.SummarizeData()` aggregates last 10 days → `summaries/YYYY/MM/summary-YYYY-MM-DD.json`
+3. Cron daily 00:05 UTC: `charts.ExportChartsJSON()` → `web/chartdata/charts.json`
+4. Cron daily 00:30 UTC: `db.PurgeOldEntries()` removes entries >30 days old
 
-### External Data Model
+### External Dependency
 
-The `insights.Data` struct is imported from `github.com/navidrome/navidrome/core/metrics/insights`. Key fields: `Version`, `OS`, `Library.ActivePlayers`, `Library.Tracks`. See the [Navidrome source](https://github.com/navidrome/navidrome/blob/main/core/metrics/insights/data.go).
+`insights.Data` struct imported from `github.com/navidrome/navidrome/core/metrics/insights`. Key fields: `Version`, `OS`, `Library.ActivePlayers`, `Library.Tracks`.
 
 ## Development
 
 ```bash
-make dev      # Docker Compose + hot reload (reflex), creates .env if missing
-make lint     # golangci-lint in container
-make linux    # Build production binary to binary/
-go test ./... # Run Ginkgo tests locally
+make dev                    # Docker Compose + hot reload (reflex)
+make lint                   # golangci-lint in container
+go test ./...               # Run Ginkgo tests locally
+DATA_FOLDER=tmp go run ./cmd/server/*.go  # Run server with custom data folder
 ```
 
-**Environment variables**:
-
-- `PORT` - HTTP server port (default: `8080`)
-- `DATA_FOLDER` - Where DB and summaries are stored (default: current dir)
+**Environment**: `PORT` (default `8080`), `DATA_FOLDER` (default current dir)
 
 ## Key Patterns
 
-### Regex-Based Mapping (`summary.go`)
+### Regex-Based Normalization (`summary/summary.go`)
 
-Player names and versions are normalized using regex maps. Empty string values mean "discard":
+Player names normalized via regex map. Empty string = discard:
 
 ```go
 var playersTypes = map[*regexp.Regexp]string{
     regexp.MustCompile("NavidromeUI.*"): "NavidromeUI",  // Normalize variants
-    regexp.MustCompile("feishin"):       "",             // Discard (old version bug)
-    regexp.MustCompile("DSubCC"):        "",             // Discard (chromecast noise)
+    regexp.MustCompile("feishin"):       "",             // Discard (buggy old versions)
 }
 ```
 
-### Binning for Distributions (`mapToBins`)
+### Binning (`mapToBins`)
 
-Numeric values are grouped into predefined bins for histograms:
-
-```go
-var trackBins = []int64{0, 1, 100, 500, 1000, 5000, 10000, 20000, 50000, 100000, 500000, 1000000}
-```
+Numeric values grouped into predefined bins: `var TrackBins = []int64{0, 1, 100, 500, ...}`
 
 ### Iterator Pattern
 
-`selectData()` returns `iter.Seq[insights.Data]` for memory-efficient processing of large datasets.
+`db.SelectData()` returns `iter.Seq[insights.Data]` for memory-efficient processing.
 
-### Incomplete Data Handling (`charts.go`)
+### Incomplete Data Detection (`charts.ExcludeIncompleteDays`)
 
-`excludeIncompleteDays()` removes trailing days where instance count drops >20%, indicating incomplete data collection.
+Removes trailing days where instance count drops >20% (indicates incomplete collection).
 
 ## Testing
 
-Uses **Ginkgo/Gomega** BDD framework. Patterns to follow:
+**Ginkgo/Gomega BDD framework**. Key patterns:
 
-- Use `DescribeTable` for parameterized tests (see `summary_test.go`)
-- Define local type aliases to construct `insights.Data` for tests:
+- Use `DescribeTable` for parameterized tests (see `summary/summary_test.go`)
+- Define local type aliases to construct `insights.Data`:
   ```go
   type insightsOS struct { Type string; Arch string; Containerized bool }
   type insightsLibrary struct { ActivePlayers map[string]int64 }
   ```
-- Test files use temp directories via `os.MkdirTemp` and set `DATA_FOLDER` env var
+- Use temp directories: `os.MkdirTemp()` + set `DATA_FOLDER` env var
 
 ## Database
 
-SQLite with WAL mode. Schema auto-created in `openDB()`:
+SQLite with WAL mode. Schema auto-created in `db.OpenDB()`:
 
 ```sql
 insights(id VARCHAR, time DATETIME, data JSONB, PRIMARY KEY (id, time))
 ```
 
-Summaries are stored as JSON files in `summaries/YYYY/MM/summary-YYYY-MM-DD.json`, not in SQLite.
+Summaries stored as JSON files in `summaries/`, not in SQLite.
 
-## Charts
+## Consolidation Tool
 
-Built with go-echarts. Charts are exported to JSON and consumed by `web/index.html`:
+Merge historical backup zip files into a single DB:
 
-- `buildVersionsChart()` - Line chart of version adoption over time (top 15 versions)
-- `buildOSChart()` - Pie chart of OS/arch distribution
-- `buildPlayerTypesChart()` - Pie chart, groups <0.2% into "Others"
-- `buildTracksChart()` - Horizontal bar chart of library sizes
+```bash
+make consolidate BACKUPS=/path/to/zips DEST=/path/to/output
+```

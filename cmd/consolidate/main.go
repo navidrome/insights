@@ -201,7 +201,15 @@ func extractFile(f *zip.File, destPath string) error {
 	return err
 }
 
+const batchSize = 30000
+
 func importData(srcDB, destDB *sql.DB) (int64, error) {
+	// Optimize for bulk import - disable sync for speed (data is recoverable from backups)
+	if _, err := destDB.Exec("PRAGMA synchronous = OFF"); err != nil {
+		return 0, fmt.Errorf("setting synchronous off: %w", err)
+	}
+	defer destDB.Exec("PRAGMA synchronous = NORMAL")
+
 	// Query all data from source
 	rows, err := srcDB.Query("SELECT id, time, data FROM insights")
 	if err != nil {
@@ -209,33 +217,67 @@ func importData(srcDB, destDB *sql.DB) (int64, error) {
 	}
 	defer rows.Close()
 
-	// Prepare insert statement with OR IGNORE to skip conflicts
-	stmt, err := destDB.Prepare("INSERT OR IGNORE INTO insights (id, time, data) VALUES (?, ?, ?)")
+	var totalImported int64
+	var batch []struct{ id, t, data string }
+
+	for rows.Next() {
+		var id, data, t string
+		if err := rows.Scan(&id, &t, &data); err != nil {
+			log.Printf("Warning: error scanning row: %v", err)
+			continue
+		}
+		batch = append(batch, struct{ id, t, data string }{id, t, data})
+
+		if len(batch) >= batchSize {
+			imported, err := insertBatch(destDB, batch)
+			if err != nil {
+				return totalImported, err
+			}
+			totalImported += imported
+			batch = batch[:0]
+		}
+	}
+
+	// Insert remaining rows
+	if len(batch) > 0 {
+		imported, err := insertBatch(destDB, batch)
+		if err != nil {
+			return totalImported, err
+		}
+		totalImported += imported
+	}
+
+	return totalImported, rows.Err()
+}
+
+func insertBatch(db *sql.DB, batch []struct{ id, t, data string }) (int64, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare("INSERT OR IGNORE INTO insights (id, time, data) VALUES (?, ?, ?)")
 	if err != nil {
 		return 0, fmt.Errorf("preparing insert statement: %w", err)
 	}
 	defer stmt.Close()
 
 	var imported int64
-	for rows.Next() {
-		var id, data string
-		var t string
-		if err := rows.Scan(&id, &t, &data); err != nil {
-			log.Printf("Warning: error scanning row: %v", err)
-			continue
-		}
-
-		result, err := stmt.Exec(id, t, data)
+	for _, row := range batch {
+		result, err := stmt.Exec(row.id, row.t, row.data)
 		if err != nil {
 			log.Printf("Warning: error inserting row: %v", err)
 			continue
 		}
-
 		affected, _ := result.RowsAffected()
 		imported += affected
 	}
 
-	return imported, rows.Err()
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("committing transaction: %w", err)
+	}
+	return imported, nil
 }
 
 func generateAllSummaries(db *sql.DB) error {

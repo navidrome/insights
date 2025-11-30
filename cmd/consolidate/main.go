@@ -15,6 +15,7 @@ import (
 
 	"github.com/navidrome/insights/db"
 	"github.com/navidrome/insights/summary"
+	"github.com/schollz/progressbar/v3"
 )
 
 func main() {
@@ -78,13 +79,11 @@ func run(backupsPath, destPath string) error {
 	// Process each backup
 	var totalImported int64
 	for i, zipFile := range zipFiles {
-		log.Printf("Processing backup %d of %d: %s", i+1, len(zipFiles), filepath.Base(zipFile))
+		log.Printf("Processing backup %d/%d: %s", i+1, len(zipFiles), filepath.Base(zipFile))
 		imported, err := processBackup(zipFile, destDB)
 		if err != nil {
-			log.Printf("Warning: error processing %s: %v", zipFile, err)
-			continue
+			log.Printf("Warning: error processing %s: %v", filepath.Base(zipFile), err)
 		}
-		log.Printf("  Imported %d rows", imported)
 		totalImported += imported
 	}
 	log.Printf("Total rows imported: %d", totalImported)
@@ -146,7 +145,7 @@ func processBackup(zipPath string, destDB *sql.DB) (int64, error) {
 	defer srcDB.Close()
 
 	// Import data
-	return importData(srcDB, destDB)
+	return importData(zipPath, srcDB, destDB)
 }
 
 func extractDB(zipPath, destDir string) (string, error) {
@@ -244,17 +243,29 @@ func recreateIndex(db *sql.DB) error {
 	return err
 }
 
-func importData(srcDB, destDB *sql.DB, limit ...int) (int64, error) {
-	// Query all data from source
-	sql := "SELECT id, time, data FROM insights"
-	if len(limit) > 0 && limit[0] > 0 {
-		sql += fmt.Sprintf(" LIMIT %d", limit[0])
+func importData(srcName string, srcDB, destDB *sql.DB) (int64, error) {
+	// Get row count for progress bar
+	var rowCount int64
+	countSQL := "SELECT COUNT(*) FROM insights"
+	if err := srcDB.QueryRow(countSQL).Scan(&rowCount); err != nil {
+		return 0, fmt.Errorf("counting rows: %w", err)
 	}
-	rows, err := srcDB.Query(sql)
+
+	// Query all data from source
+	rows, err := srcDB.Query("SELECT id, time, data FROM insights")
 	if err != nil {
 		return 0, fmt.Errorf("querying source database: %w", err)
 	}
 	defer rows.Close()
+
+	description := fmt.Sprintf("  %s", filepath.Base(srcName))
+	bar := progressbar.NewOptions64(rowCount,
+		progressbar.OptionSetDescription(description),
+		progressbar.OptionShowCount(),
+		progressbar.OptionSetPredictTime(true),
+		progressbar.OptionFullWidth(),
+		progressbar.OptionShowIts(),
+	)
 
 	var totalImported int64
 	var batch []row
@@ -262,7 +273,7 @@ func importData(srcDB, destDB *sql.DB, limit ...int) (int64, error) {
 	for rows.Next() {
 		var r row
 		if err := rows.Scan(&r.id, &r.t, &r.data); err != nil {
-			log.Printf("Warning: error scanning row: %v", err)
+			log.Printf("\nWarning: error scanning row: %v", err)
 			continue
 		}
 		batch = append(batch, r)
@@ -273,6 +284,7 @@ func importData(srcDB, destDB *sql.DB, limit ...int) (int64, error) {
 				return totalImported, err
 			}
 			totalImported += imported
+			bar.Add(len(batch))
 			batch = batch[:0]
 		}
 	}
@@ -284,8 +296,10 @@ func importData(srcDB, destDB *sql.DB, limit ...int) (int64, error) {
 			return totalImported, err
 		}
 		totalImported += imported
+		bar.Add(len(batch))
 	}
 
+	fmt.Println() // newline after progress bar
 	return totalImported, rows.Err()
 }
 
@@ -384,23 +398,27 @@ func generateAllSummaries(db *sql.DB) error {
 		return err
 	}
 
-	log.Printf("Generating summaries for %d days...", len(dates))
+	bar := progressbar.NewOptions(len(dates),
+		progressbar.OptionSetDescription("Generating summaries"),
+		progressbar.OptionShowCount(),
+		progressbar.OptionSetPredictTime(true),
+		progressbar.OptionFullWidth(),
+	)
 
-	for i, dateStr := range dates {
+	for _, dateStr := range dates {
 		date, err := parseDate(dateStr)
 		if err != nil {
-			log.Printf("Warning: skipping invalid date %s: %v", dateStr, err)
+			log.Printf("\nWarning: skipping invalid date %s: %v", dateStr, err)
+			bar.Add(1)
 			continue
 		}
 
-		if (i+1)%50 == 0 || i+1 == len(dates) {
-			log.Printf("  Progress: %d/%d (current: %s)", i+1, len(dates), dateStr)
-		}
-
 		if err := summary.SummarizeData(db, date); err != nil {
-			log.Printf("Warning: error summarizing %s: %v", dateStr, err)
+			log.Printf("\nWarning: error summarizing %s: %v", dateStr, err)
 		}
+		bar.Add(1)
 	}
+	fmt.Println() // newline after progress bar
 
 	return nil
 }

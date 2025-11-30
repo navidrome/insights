@@ -218,7 +218,7 @@ type row struct{ id, t, data string }
 
 func applyBulkPragmas(db *sql.DB) error {
 	pragmas := []string{
-		"PRAGMA page_size = 32768",
+		"PRAGMA page_size = 16384",
 		"PRAGMA synchronous = OFF",
 		"PRAGMA journal_mode = OFF",
 		"PRAGMA locking_mode = EXCLUSIVE",
@@ -244,9 +244,13 @@ func recreateIndex(db *sql.DB) error {
 	return err
 }
 
-func importData(srcDB, destDB *sql.DB) (int64, error) {
+func importData(srcDB, destDB *sql.DB, limit ...int) (int64, error) {
 	// Query all data from source
-	rows, err := srcDB.Query("SELECT id, time, data FROM insights")
+	sql := "SELECT id, time, data FROM insights"
+	if len(limit) > 0 && limit[0] > 0 {
+		sql += fmt.Sprintf(" LIMIT %d", limit[0])
+	}
+	rows, err := srcDB.Query(sql)
 	if err != nil {
 		return 0, fmt.Errorf("querying source database: %w", err)
 	}
@@ -309,6 +313,26 @@ func insertBatch(db *sql.DB, batch []row) (int64, error) {
 	}
 	defer tx.Rollback()
 
+	// Cache prepared statements within this transaction
+	txStmtCache := make(map[int]*sql.Stmt)
+	defer func() {
+		for _, stmt := range txStmtCache {
+			stmt.Close()
+		}
+	}()
+
+	getStmt := func(n int) (*sql.Stmt, error) {
+		if stmt, ok := txStmtCache[n]; ok {
+			return stmt, nil
+		}
+		stmt, err := tx.Prepare(buildMultiInsertSQL(n))
+		if err != nil {
+			return nil, err
+		}
+		txStmtCache[n] = stmt
+		return stmt, nil
+	}
+
 	var totalImported int64
 
 	// Process in chunks of insertBatchSize using multi-value INSERT
@@ -316,13 +340,17 @@ func insertBatch(db *sql.DB, batch []row) (int64, error) {
 		end := min(i+insertBatchSize, len(batch))
 		chunk := batch[i:end]
 
-		query := buildMultiInsertSQL(len(chunk))
+		stmt, err := getStmt(len(chunk))
+		if err != nil {
+			return totalImported, fmt.Errorf("preparing statement: %w", err)
+		}
+
 		args := make([]any, 0, len(chunk)*3)
 		for _, r := range chunk {
 			args = append(args, r.id, r.t, r.data)
 		}
 
-		result, err := tx.Exec(query, args...)
+		result, err := stmt.Exec(args...)
 		if err != nil {
 			return totalImported, fmt.Errorf("executing batch insert: %w", err)
 		}

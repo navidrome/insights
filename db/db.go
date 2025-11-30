@@ -33,10 +33,10 @@ func OpenDB(fileName string) (*sql.DB, error) {
 CREATE TABLE IF NOT EXISTS insights (
 	id VARCHAR NOT NULL,
 	time DATETIME default CURRENT_TIMESTAMP,
-	data JSONB,
-	PRIMARY KEY (id, time)
+	data JSONB
 );
 CREATE INDEX IF NOT EXISTS insights_time ON insights(time);
+CREATE INDEX IF NOT EXISTS insights_id_time ON insights(id, time);
 `
 	_, err = db.Exec(createTableQuery)
 	if err != nil {

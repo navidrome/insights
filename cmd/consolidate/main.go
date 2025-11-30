@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"crypto/md5"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -48,9 +49,9 @@ func run(backupsPath, destPath string) error {
 	// Set DATA_FOLDER for summary storage
 	os.Setenv("DATA_FOLDER", destPath)
 
-	// Create consolidated database
+	// Create consolidated database (without indexes for faster inserts)
 	log.Printf("Creating consolidated database: %s", consolidatedDBPath)
-	destDB, err := db.OpenDB(consolidatedDBPath)
+	destDB, err := openDestDB(consolidatedDBPath)
 	if err != nil {
 		return fmt.Errorf("creating consolidated database: %w", err)
 	}
@@ -59,11 +60,6 @@ func run(backupsPath, destPath string) error {
 	// Apply bulk import optimizations
 	if err := applyBulkPragmas(destDB); err != nil {
 		return fmt.Errorf("applying bulk pragmas: %w", err)
-	}
-
-	// Drop index for faster inserts
-	if err := dropIndex(destDB); err != nil {
-		return fmt.Errorf("dropping index: %w", err)
 	}
 
 	// Find all backup zip files
@@ -76,21 +72,24 @@ func run(backupsPath, destPath string) error {
 	}
 	log.Printf("Found %d backup files", len(zipFiles))
 
+	// Track seen (id, time) pairs to avoid duplicates across backups
+	seenKeys := make(map[[16]byte]struct{})
+
 	// Process each backup
 	var totalImported int64
 	for i, zipFile := range zipFiles {
 		log.Printf("Processing backup %d/%d: %s", i+1, len(zipFiles), filepath.Base(zipFile))
-		imported, err := processBackup(zipFile, destDB)
+		imported, err := processBackup(zipFile, destDB, seenKeys)
 		if err != nil {
 			log.Printf("Warning: error processing %s: %v", filepath.Base(zipFile), err)
 		}
 		totalImported += imported
 	}
-	log.Printf("Total rows imported: %d", totalImported)
+	log.Printf("Total rows imported: %d (dedup set size: %d)", totalImported, len(seenKeys))
 
-	// Recreate index after all imports
-	if err := recreateIndex(destDB); err != nil {
-		return fmt.Errorf("recreating index: %w", err)
+	// Create indexes after all imports
+	if err := createIndexes(destDB); err != nil {
+		return fmt.Errorf("creating indexes: %w", err)
 	}
 
 	// Generate summaries for all dates in the consolidated database
@@ -123,9 +122,10 @@ func findBackupZips(backupsPath string) ([]string, error) {
 	return zipFiles, nil
 }
 
-func processBackup(zipPath string, destDB *sql.DB) (int64, error) {
+func processBackup(zipPath string, destDB *sql.DB, seenKeys map[[16]byte]struct{}) (int64, error) {
 	// Create temp directory for extraction
 	tempDir, err := os.MkdirTemp("", "insights-backup-*")
+	log.Printf("Extracting backup to temp dir: %s", tempDir)
 	if err != nil {
 		return 0, fmt.Errorf("creating temp directory: %w", err)
 	}
@@ -145,7 +145,7 @@ func processBackup(zipPath string, destDB *sql.DB) (int64, error) {
 	defer srcDB.Close()
 
 	// Import data
-	return importData(zipPath, srcDB, destDB)
+	return importData(zipPath, srcDB, destDB, seenKeys)
 }
 
 func extractDB(zipPath, destDir string) (string, error) {
@@ -217,7 +217,6 @@ type row struct{ id, t, data string }
 
 func applyBulkPragmas(db *sql.DB) error {
 	pragmas := []string{
-		"PRAGMA page_size = 16384",
 		"PRAGMA synchronous = OFF",
 		"PRAGMA journal_mode = OFF",
 		"PRAGMA locking_mode = EXCLUSIVE",
@@ -231,19 +230,48 @@ func applyBulkPragmas(db *sql.DB) error {
 	return nil
 }
 
-func dropIndex(db *sql.DB) error {
-	log.Printf("Dropping index for faster imports...")
-	_, err := db.Exec("DROP INDEX IF EXISTS insights_time")
+// openDestDB opens a database for bulk imports (no primary key, no index)
+func openDestDB(fileName string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", fileName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Set page size before creating any tables
+	if _, err := db.Exec("PRAGMA page_size = 16384"); err != nil {
+		return nil, fmt.Errorf("setting page size: %w", err)
+	}
+
+	// Create table WITHOUT primary key for faster inserts
+	createTableQuery := `
+CREATE TABLE IF NOT EXISTS insights (
+	id VARCHAR NOT NULL,
+	time DATETIME default CURRENT_TIMESTAMP,
+	data JSONB
+)`
+	if _, err := db.Exec(createTableQuery); err != nil {
+		return nil, fmt.Errorf("creating table: %w", err)
+	}
+
+	db.SetMaxOpenConns(1)
+	return db, nil
+}
+
+func createIndexes(db *sql.DB) error {
+	log.Printf("Creating indexes...")
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS insights_time ON insights(time)"); err != nil {
+		return err
+	}
+	_, err := db.Exec("CREATE INDEX IF NOT EXISTS insights_id_time ON insights(id, time)")
 	return err
 }
 
-func recreateIndex(db *sql.DB) error {
-	log.Printf("Recreating index...")
-	_, err := db.Exec("CREATE INDEX IF NOT EXISTS insights_time ON insights(time)")
-	return err
+// hashKey creates an MD5 hash of the (id, time) pair for deduplication
+func hashKey(id, t string) [16]byte {
+	return md5.Sum([]byte(id + "\x00" + t))
 }
 
-func importData(srcName string, srcDB, destDB *sql.DB) (int64, error) {
+func importData(srcName string, srcDB, destDB *sql.DB, seenKeys map[[16]byte]struct{}) (int64, error) {
 	// Get row count for progress bar
 	var rowCount int64
 	countSQL := "SELECT COUNT(*) FROM insights"
@@ -268,6 +296,7 @@ func importData(srcName string, srcDB, destDB *sql.DB) (int64, error) {
 	)
 
 	var totalImported int64
+	var totalScanned int64
 	var batch []row
 
 	for rows.Next() {
@@ -276,6 +305,18 @@ func importData(srcName string, srcDB, destDB *sql.DB) (int64, error) {
 			log.Printf("\nWarning: error scanning row: %v", err)
 			continue
 		}
+		totalScanned++
+
+		// Skip duplicates using hash set
+		key := hashKey(r.id, r.t)
+		if _, seen := seenKeys[key]; seen {
+			if totalScanned%int64(batchSize) == 0 {
+				bar.Add(batchSize)
+			}
+			continue
+		}
+		seenKeys[key] = struct{}{}
+
 		batch = append(batch, r)
 
 		if len(batch) >= batchSize {
@@ -284,7 +325,7 @@ func importData(srcName string, srcDB, destDB *sql.DB) (int64, error) {
 				return totalImported, err
 			}
 			totalImported += imported
-			bar.Add(len(batch))
+			bar.Set64(totalScanned)
 			batch = batch[:0]
 		}
 	}
@@ -296,8 +337,8 @@ func importData(srcName string, srcDB, destDB *sql.DB) (int64, error) {
 			return totalImported, err
 		}
 		totalImported += imported
-		bar.Add(len(batch))
 	}
+	bar.Set64(totalScanned)
 
 	fmt.Println() // newline after progress bar
 	return totalImported, rows.Err()
@@ -306,7 +347,7 @@ func importData(srcName string, srcDB, destDB *sql.DB) (int64, error) {
 // buildMultiInsertSQL builds a multi-value INSERT statement for n rows
 func buildMultiInsertSQL(n int) string {
 	var sb strings.Builder
-	sb.WriteString("INSERT OR IGNORE INTO insights (id, time, data) VALUES ")
+	sb.WriteString("INSERT INTO insights (id, time, data) VALUES ")
 	for i := range n {
 		if i > 0 {
 			sb.WriteByte(',')

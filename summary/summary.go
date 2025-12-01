@@ -26,26 +26,27 @@ type Stats struct {
 }
 
 type Summary struct {
-	NumInstances   int64             `json:"numInstances,omitempty"`
-	NumActiveUsers int64             `json:"numActiveUsers,omitempty"`
-	Versions       map[string]uint64 `json:"versions,omitempty"`
-	OS             map[string]uint64 `json:"os,omitempty"`
-	Distros        map[string]uint64 `json:"distros,omitempty"`
-	PlayerTypes    map[string]uint64 `json:"playerTypes,omitempty"`
-	Players        map[string]uint64 `json:"players,omitempty"`
-	Users          map[string]uint64 `json:"users,omitempty"`
-	Tracks         map[string]uint64 `json:"tracks,omitempty"`
-	Albums         map[string]uint64 `json:"albums,omitempty"`
-	Artists        map[string]uint64 `json:"artists,omitempty"`
-	MusicFS        map[string]uint64 `json:"musicFS,omitempty"`
-	DataFS         map[string]uint64 `json:"dataFS,omitempty"`
-	TrackStats     *Stats            `json:"trackStats,omitempty"`
-	AlbumStats     *Stats            `json:"albumStats,omitempty"`
-	ArtistStats    *Stats            `json:"artistStats,omitempty"`
-	PlaylistStats  *Stats            `json:"playlistStats,omitempty"`
-	ShareStats     *Stats            `json:"shareStats,omitempty"`
-	RadioStats     *Stats            `json:"radioStats,omitempty"`
-	LibraryStats   *Stats            `json:"libraryStats,omitempty"`
+	NumInstances    int64             `json:"numInstances,omitempty"`
+	NumActiveUsers  int64             `json:"numActiveUsers,omitempty"`
+	Versions        map[string]uint64 `json:"versions,omitempty"`
+	OS              map[string]uint64 `json:"os,omitempty"`
+	Distros         map[string]uint64 `json:"distros,omitempty"`
+	PlayerTypes     map[string]uint64 `json:"playerTypes,omitempty"`
+	Players         map[string]uint64 `json:"players,omitempty"`
+	Users           map[string]uint64 `json:"users,omitempty"`
+	Tracks          map[string]uint64 `json:"tracks,omitempty"`
+	Albums          map[string]uint64 `json:"albums,omitempty"`
+	Artists         map[string]uint64 `json:"artists,omitempty"`
+	MusicFS         map[string]uint64 `json:"musicFS,omitempty"`
+	DataFS          map[string]uint64 `json:"dataFS,omitempty"`
+	TrackStats      *Stats            `json:"trackStats,omitempty"`
+	AlbumStats      *Stats            `json:"albumStats,omitempty"`
+	ArtistStats     *Stats            `json:"artistStats,omitempty"`
+	PlaylistStats   *Stats            `json:"playlistStats,omitempty"`
+	ShareStats      *Stats            `json:"shareStats,omitempty"`
+	RadioStats      *Stats            `json:"radioStats,omitempty"`
+	LibraryStats    *Stats            `json:"libraryStats,omitempty"`
+	ActiveUserStats *Stats            `json:"activeUserStats,omitempty"`
 }
 
 func SummarizeData(dbConn *sql.DB, date time.Time) error {
@@ -71,6 +72,7 @@ func SummarizeData(dbConn *sql.DB, date time.Time) error {
 	// Collect values for statistics calculation
 	var trackValues, albumValues, artistValues []int64
 	var playlistValues, shareValues, radioValues, libraryValues []int64
+	var activeUserValues []int64
 
 	for data := range rows {
 		// Summarize data here
@@ -102,11 +104,12 @@ func SummarizeData(dbConn *sql.DB, date time.Time) error {
 		if data.Library.Artists > 0 {
 			artistValues = append(artistValues, data.Library.Artists)
 		}
-		// Collect all values for playlists, shares, radios, libraries (including zeros)
+		// Collect all values for playlists, shares, radios, libraries, activeUsers (including zeros)
 		playlistValues = append(playlistValues, data.Library.Playlists)
 		shareValues = append(shareValues, data.Library.Shares)
 		radioValues = append(radioValues, data.Library.Radios)
 		libraryValues = append(libraryValues, data.Library.Libraries)
+		activeUserValues = append(activeUserValues, data.Library.ActiveUsers)
 	}
 
 	if summary.NumInstances == 0 {
@@ -122,6 +125,7 @@ func SummarizeData(dbConn *sql.DB, date time.Time) error {
 	summary.ShareStats = calcStats(shareValues)
 	summary.RadioStats = calcStats(radioValues)
 	summary.LibraryStats = calcStats(libraryValues)
+	summary.ActiveUserStats = calcStats(activeUserValues)
 
 	// Save summary to file
 	err = SaveSummary(summary, date)

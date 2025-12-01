@@ -88,7 +88,7 @@ ORDER BY i1.id, i1.time DESC;`
 		return nil, fmt.Errorf("querying data: %w", err)
 	}
 	return func(yield func(insights.Data) bool) {
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var j string
 			var id string

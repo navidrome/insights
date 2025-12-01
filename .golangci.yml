@@ -1,5 +1,5 @@
-run:
-  timeout: 5m
+version: "2"
+
 linters:
   enable:
     - asasalint
@@ -14,17 +14,15 @@ linters:
     - gocyclo
     - goprintffuncname
     - gosec
-    - gosimple
     - govet
     - ineffassign
     - misspell
     - nilerr
     - staticcheck
-    - typecheck
     - unconvert
     - unused
     - whitespace
-linters-settings:
-  gosec:
-    excludes:
-      - G115 # Can't check context, where the warning is clearly a false positive. See discussion in https://github.com/securego/gosec/pull/1149
+  settings:
+    gosec:
+      excludes:
+        - G115 # Can't check context, where the warning is clearly a false positive. See discussion in https://github.com/securego/gosec/pull/1149

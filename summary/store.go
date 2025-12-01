@@ -34,7 +34,7 @@ func SaveSummary(summary Summary, t time.Time) error {
 
 	// Create directory structure if needed
 	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return err
 	}
 
@@ -44,7 +44,7 @@ func SaveSummary(summary Summary, t time.Time) error {
 		return err
 	}
 
-	return os.WriteFile(filePath, data, 0644)
+	return os.WriteFile(filePath, data, 0600)
 }
 
 // summaryFileRegex matches files like "summary-2025-11-29.json"
@@ -84,7 +84,7 @@ func GetSummaries() ([]SummaryRecord, error) {
 		}
 
 		// Read and parse file
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //#nosec G304 -- path is from controlled directory walk
 		if err != nil {
 			log.Printf("Warning: skipping unreadable file %s: %v", path, err)
 			return nil

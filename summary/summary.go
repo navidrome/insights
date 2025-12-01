@@ -217,7 +217,7 @@ func mapOS(data insights.Data) string {
 			return "Linux"
 		default:
 			s := caser.String(data.OS.Type)
-			return strings.Replace(s, "bsd", "BSD", -1)
+			return strings.ReplaceAll(s, "bsd", "BSD")
 		}
 	}()
 	return osName + " - " + data.OS.Arch

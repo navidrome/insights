@@ -22,3 +22,11 @@ consolidate:
 	fi
 	go run ./cmd/consolidate -backups "$(BACKUPS)" -dest "$(DEST)"
 .PHONY: consolidate
+
+summarize:
+	@if [ -z "$(DATA)" ]; then \
+		echo "Usage: make summarize DATA=<destination-folder>"; \
+		exit 1; \
+	fi
+	go run ./cmd/consolidate -summaries-only -dest "$(DATA)"
+.PHONY: summarize

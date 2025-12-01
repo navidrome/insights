@@ -135,6 +135,7 @@ Chart data comes from `[]SummaryRecord` which contains:
 - `Data.ShareStats` - share statistics (Min, Max, Mean, Median, StdDev)
 - `Data.RadioStats` - radio statistics (Min, Max, Mean, Median, StdDev)
 - `Data.LibraryStats` - library statistics (Min, Max, Mean, Median, StdDev)
+- `Data.ActiveUserStats` - active user statistics (Min, Max, Mean, Median, StdDev)
 
 ## Architecture
 

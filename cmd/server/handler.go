@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/navidrome/insights/db"
@@ -35,5 +37,49 @@ func handler(dbConn *sql.DB) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusOK)
+	}
+}
+
+// apiKeyMiddleware validates the API key if API_KEY env var is set.
+// If API_KEY is empty, all requests are allowed (public access).
+// Otherwise, requires Authorization: Bearer <key> header or api_key query param.
+func apiKeyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiKey := os.Getenv("API_KEY")
+		if apiKey == "" {
+			// No API key configured, allow public access
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Check Authorization header
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			if strings.TrimPrefix(authHeader, "Bearer ") == apiKey {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		// Check query parameter
+		if r.URL.Query().Get("api_key") == apiKey {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	})
+}
+
+// chartsJSONHandler serves the charts.json file directly.
+func chartsJSONHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filePath := "web/chartdata/charts.json"
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			http.Error(w, "Charts data not available", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		http.ServeFile(w, r, filePath)
 	}
 }

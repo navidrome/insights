@@ -19,6 +19,7 @@ web/              → Static frontend (index.html consumes chartdata/charts.json
 2. Cron every 2h: `summary.SummarizeData()` aggregates last 10 days → `summaries/YYYY/MM/summary-YYYY-MM-DD.json`
 3. Cron daily 00:05 UTC: `charts.ExportChartsJSON()` → `web/chartdata/charts.json`
 4. Cron daily 00:30 UTC: `db.PurgeOldEntries()` removes entries >30 days old
+5. `/api/charts` serves `charts.json` (protected by `API_KEY` if set, public otherwise)
 
 ### External Dependency
 
@@ -33,7 +34,14 @@ go test ./...               # Run Ginkgo tests locally
 DATA_FOLDER=tmp go run ./cmd/server/*.go  # Run server with custom data folder
 ```
 
-**Environment**: `PORT` (default `8080`), `DATA_FOLDER` (default current dir)
+**Environment**: `PORT` (default `8080`), `DATA_FOLDER` (default current dir), `API_KEY` (optional, protects `/api/charts`)
+
+### Build Tags
+
+- **Production** (`go build`): Only `/collect` and `/api/charts` endpoints available
+- **Development** (`go build -tags dev`): Adds `/`, `/chartdata/*`, `/charts` routes for static frontend and legacy server-rendered charts
+
+The `make dev` command automatically uses `-tags dev` via reflex.
 
 ## Key Patterns
 

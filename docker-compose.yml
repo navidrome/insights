@@ -14,3 +14,4 @@ services:
     environment:
       GOCACHE: /go-cache
       DATA_FOLDER: ${DATA_FOLDER}
+      API_KEY: ${API_KEY}

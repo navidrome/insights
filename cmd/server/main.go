@@ -12,7 +12,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httprate"
-	"github.com/navidrome/insights/charts"
 	"github.com/navidrome/insights/db"
 	"github.com/robfig/cron/v3"
 )
@@ -57,14 +56,11 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 
-	// Static files for charts
-	r.Handle("/chartdata/*", http.StripPrefix("/chartdata/", http.FileServer(http.Dir("web/chartdata"))))
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "web/index.html")
-	})
+	// Dev-only routes (static files and charts endpoint)
+	registerDevRoutes(r)
 
-	// Charts endpoint (no rate limiting) - legacy, renders server-side
-	r.Get("/charts", charts.ChartsHandler())
+	// API endpoint to serve charts.json (protected by API_KEY if set)
+	r.With(apiKeyMiddleware).Get("/api/charts", chartsJSONHandler())
 
 	// Rate-limited collect endpoint
 	limiter := httprate.NewRateLimiter(1, 30*time.Minute, httprate.WithKeyByIP())

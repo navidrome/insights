@@ -122,12 +122,19 @@ Chart data comes from `[]SummaryRecord` which contains:
 - `Data.Players` - map of player count → instances
 - `Data.Users` - map of user count → instances
 - `Data.Tracks` - map of track bin → count
+- `Data.Albums` - map of album bin → count
+- `Data.Artists` - map of artist bin → count
 - `Data.MusicFS` - map of filesystem type → count
 - `Data.DataFS` - map of filesystem type → count
 - `Data.NumInstances` - total instances
 - `Data.NumActiveUsers` - total active users
-- `Data.LibSizeAverage` - average library size
-- `Data.LibSizeStdDev` - library size standard deviation
+- `Data.TrackStats` - track statistics (Min, Max, Mean, Median, StdDev)
+- `Data.AlbumStats` - album statistics (Min, Max, Mean, Median, StdDev)
+- `Data.ArtistStats` - artist statistics (Min, Max, Mean, Median, StdDev)
+- `Data.PlaylistStats` - playlist statistics (Min, Max, Mean, Median, StdDev)
+- `Data.ShareStats` - share statistics (Min, Max, Mean, Median, StdDev)
+- `Data.RadioStats` - radio statistics (Min, Max, Mean, Median, StdDev)
+- `Data.LibraryStats` - library statistics (Min, Max, Mean, Median, StdDev)
 
 ## Architecture
 

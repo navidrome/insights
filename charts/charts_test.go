@@ -356,6 +356,40 @@ var _ = Describe("Charts", func() {
 		})
 	})
 
+	Describe("buildAlbumsArtistsChart", func() {
+		It("returns nil when no summaries exist", func() {
+			chart := buildAlbumsArtistsChart([]summary.SummaryRecord{})
+			Expect(chart).To(BeNil())
+		})
+
+		It("returns horizontal bar chart with albums and artists distribution from latest summary", func() {
+			summaries := []summary.SummaryRecord{
+				{
+					Time: time.Now(),
+					Data: summary.Summary{
+						Albums:  map[string]uint64{"0": 50, "100": 200, "1000": 150, "5000": 80},
+						Artists: map[string]uint64{"0": 40, "100": 180, "1000": 120, "5000": 60},
+					},
+				},
+			}
+
+			chart := buildAlbumsArtistsChart(summaries)
+			Expect(chart).NotTo(BeNil())
+		})
+
+		It("handles empty albums and artists data", func() {
+			summaries := []summary.SummaryRecord{
+				{
+					Time: time.Now(),
+					Data: summary.Summary{Albums: map[string]uint64{}, Artists: map[string]uint64{}},
+				},
+			}
+
+			chart := buildAlbumsArtistsChart(summaries)
+			Expect(chart).NotTo(BeNil())
+		})
+	})
+
 	Describe("getTopKeys", func() {
 		It("returns top N keys sorted by value descending", func() {
 			m := map[string]uint64{
@@ -436,13 +470,14 @@ var _ = Describe("Charts", func() {
 			var chartsData []map[string]interface{}
 			err = json.Unmarshal(data, &chartsData)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(chartsData).To(HaveLen(5))
+			Expect(chartsData).To(HaveLen(6))
 			Expect(chartsData[0]["id"]).To(Equal("versions"))
 			Expect(chartsData[1]["id"]).To(Equal("os"))
 			Expect(chartsData[2]["id"]).To(Equal("players"))
 			Expect(chartsData[3]["id"]).To(Equal("playerTypes"))
 			// Expect(chartsData[4]["id"]).To(Equal("playersPerInstallation"))
 			Expect(chartsData[4]["id"]).To(Equal("tracks"))
+			Expect(chartsData[5]["id"]).To(Equal("albumsArtists"))
 		})
 	})
 })

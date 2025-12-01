@@ -1,3 +1,5 @@
 Dockerfile
 docker-compose.yml
 insights*
+tmp/
+tmp/**

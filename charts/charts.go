@@ -70,6 +70,7 @@ func ChartsHandler() http.HandlerFunc {
 			buildPlayersChart(summaries),
 			buildPlayersPerInstallationChart(summaries),
 			buildTracksChart(summaries),
+			buildAlbumsArtistsChart(summaries),
 		)
 
 		w.Header().Set("Content-Type", "text/html")
@@ -486,6 +487,12 @@ var trackBinLabels = []string{
 	"100,001-500,000", "500,001-1,000,000", ">1,000,001",
 }
 
+var albumArtistBinLabels = []string{
+	"0", "1-10", "11-50", "51-100", "101-500",
+	"501-1,000", "1,001-2,000", "2,001-5,000",
+	"5,001-10,000", "10,001-50,000", ">50,000",
+}
+
 func buildTracksChart(summaries []summary.SummaryRecord) *charts.Bar {
 	if len(summaries) == 0 {
 		return nil
@@ -567,6 +574,106 @@ func buildTracksChart(summaries []summary.SummaryRecord) *charts.Bar {
 	return bar
 }
 
+func buildAlbumsArtistsChart(summaries []summary.SummaryRecord) *charts.Bar {
+	if len(summaries) == 0 {
+		return nil
+	}
+	latest := summaries[len(summaries)-1]
+
+	// Map bin values to labels, maintaining order from AlbumBins/ArtistBins in summary.go
+	binToLabel := map[string]string{
+		"0":      "0",
+		"1":      "1-10",
+		"10":     "11-50",
+		"50":     "51-100",
+		"100":    "101-500",
+		"500":    "501-1,000",
+		"1000":   "1,001-2,000",
+		"2000":   "2,001-5,000",
+		"5000":   "5,001-10,000",
+		"10000":  "10,001-50,000",
+		"50000":  ">50,000",
+		"100000": ">50,000", // Merge 50000 and 100000 into >50,000
+	}
+
+	// Build albums data
+	albumsData := make([]opts.BarData, len(albumArtistBinLabels))
+	for i, label := range albumArtistBinLabels {
+		var value uint64
+		for binKey, binLabel := range binToLabel {
+			if binLabel == label {
+				value += latest.Data.Albums[binKey]
+			}
+		}
+		albumsData[i] = opts.BarData{Value: value}
+	}
+
+	// Build artists data
+	artistsData := make([]opts.BarData, len(albumArtistBinLabels))
+	for i, label := range albumArtistBinLabels {
+		var value uint64
+		for binKey, binLabel := range binToLabel {
+			if binLabel == label {
+				value += latest.Data.Artists[binKey]
+			}
+		}
+		artistsData[i] = opts.BarData{Value: value}
+	}
+
+	bar := charts.NewBar()
+	bar.SetGlobalOptions(
+		charts.WithInitializationOpts(opts.Initialization{
+			Width:           chartWidth,
+			Height:          chartHeight,
+			BackgroundColor: "#ffffff",
+		}),
+		charts.WithTitleOpts(opts.Title{
+			Title:      "Albums and Artists in Library",
+			TitleStyle: &opts.TextStyle{Color: "#000000"},
+		}),
+		charts.WithTooltipOpts(opts.Tooltip{
+			Show:    opts.Bool(true),
+			Trigger: "axis",
+		}),
+		charts.WithLegendOpts(opts.Legend{
+			Show:   opts.Bool(true),
+			Top:    "30",
+			Orient: "horizontal",
+			TextStyle: &opts.TextStyle{
+				Color: "#000000",
+			},
+		}),
+		charts.WithXAxisOpts(opts.XAxis{
+			Name:         "Count of Installations",
+			NameLocation: "center",
+			NameGap:      30,
+			AxisLabel: &opts.AxisLabel{
+				Color: "#000000",
+			},
+		}),
+		charts.WithYAxisOpts(opts.YAxis{
+			Name:         "Items in Library",
+			NameLocation: "center",
+			NameGap:      100,
+			AxisLabel: &opts.AxisLabel{
+				Color: "#000000",
+			},
+		}),
+		charts.WithGridOpts(opts.Grid{
+			Left:   "140",
+			Top:    "80",
+			Bottom: "60",
+		}),
+	)
+
+	bar.SetXAxis(albumArtistBinLabels).
+		AddSeries("Albums", albumsData).
+		AddSeries("Artists", artistsData).
+		XYReversal()
+
+	return bar
+}
+
 // getTopKeys returns the top N keys from a map sorted by value descending
 func getTopKeys(m map[string]uint64, n int) []string {
 	type kv struct {
@@ -623,6 +730,9 @@ func ExportChartsJSON(outputDir string) error {
 	tracksChart := buildTracksChart(summaries)
 	tracksChart.Validate()
 
+	albumsArtistsChart := buildAlbumsArtistsChart(summaries)
+	albumsArtistsChart.Validate()
+
 	// Combine all charts into a single JSON array to preserve order
 	chartsData := []map[string]interface{}{
 		{"id": "versions", "options": versionsChart.JSON()},
@@ -631,6 +741,7 @@ func ExportChartsJSON(outputDir string) error {
 		{"id": "playerTypes", "options": playerTypesChart.JSON()},
 		// {"id": "playersPerInstallation", "options": playersPerInstallationChart.JSON()},
 		{"id": "tracks", "options": tracksChart.JSON()},
+		{"id": "albumsArtists", "options": albumsArtistsChart.JSON()},
 	}
 
 	// Marshal to JSON

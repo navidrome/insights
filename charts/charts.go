@@ -292,7 +292,7 @@ func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
 			BackgroundColor: "#ffffff",
 		}),
 		charts.WithTitleOpts(opts.Title{
-			Title:      "Player types",
+			Title:      "Client types",
 			TitleStyle: &opts.TextStyle{Color: "#000000"},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
@@ -309,7 +309,7 @@ func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
 		}),
 	)
 
-	pie.AddSeries("Player type", data).
+	pie.AddSeries("Client type", data).
 		SetSeriesOptions(
 			charts.WithLabelOpts(opts.Label{
 				Show: opts.Bool(false),
@@ -337,7 +337,7 @@ func buildPlayersChart(summaries []summary.SummaryRecord) *charts.Line {
 			BackgroundColor: "#ffffff",
 		}),
 		charts.WithTitleOpts(opts.Title{
-			Title:      "Number of Active Players",
+			Title:      "Number of Active Clients",
 			TitleStyle: &opts.TextStyle{Color: "#000000"},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
@@ -356,7 +356,7 @@ func buildPlayersChart(summaries []summary.SummaryRecord) *charts.Line {
 			},
 		}),
 		charts.WithYAxisOpts(opts.YAxis{
-			Name:         "Players",
+			Name:         "Clients",
 			NameLocation: "center",
 			NameGap:      50,
 			AxisLabel: &opts.AxisLabel{
@@ -381,7 +381,7 @@ func buildPlayersChart(summaries []summary.SummaryRecord) *charts.Line {
 		}
 		totalData[i] = opts.LineData{Value: total}
 	}
-	line.AddSeries("Total Players", totalData)
+	line.AddSeries("Total Clients", totalData)
 
 	line.SetSeriesOptions(
 		charts.WithLineChartOpts(opts.LineChart{Smooth: opts.Bool(true)}),
@@ -444,7 +444,7 @@ func buildPlayersPerInstallationChart(summaries []summary.SummaryRecord) *charts
 			BackgroundColor: "#ffffff",
 		}),
 		charts.WithTitleOpts(opts.Title{
-			Title:      "Active Players per Installation",
+			Title:      "Active Clients per Installation",
 			TitleStyle: &opts.TextStyle{Color: "#000000"},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
@@ -455,7 +455,7 @@ func buildPlayersPerInstallationChart(summaries []summary.SummaryRecord) *charts
 			Show: opts.Bool(false),
 		}),
 		charts.WithXAxisOpts(opts.XAxis{
-			Name:         "Active Players per Installation",
+			Name:         "Active Clients per Installation",
 			NameLocation: "center",
 			NameGap:      30,
 			AxisLabel: &opts.AxisLabel{

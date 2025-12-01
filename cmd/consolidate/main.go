@@ -2,7 +2,7 @@ package main
 
 import (
 	"archive/zip"
-	"crypto/md5"
+	"crypto/md5" //#nosec G501 -- used only for deduplication, not security
 	"database/sql"
 	"flag"
 	"fmt"
@@ -43,12 +43,14 @@ func main() {
 
 func run(backupsPath, destPath string, summariesOnly bool) error {
 	// Ensure destination folder exists
-	if err := os.MkdirAll(destPath, 0755); err != nil {
+	if err := os.MkdirAll(destPath, 0750); err != nil {
 		return fmt.Errorf("creating destination folder: %w", err)
 	}
 
 	// Set DATA_FOLDER for summary storage
-	os.Setenv("DATA_FOLDER", destPath)
+	if err := os.Setenv("DATA_FOLDER", destPath); err != nil {
+		return fmt.Errorf("setting DATA_FOLDER: %w", err)
+	}
 
 	consolidatedDBPath := filepath.Join(destPath, "insights.db")
 
@@ -59,7 +61,7 @@ func run(backupsPath, destPath string, summariesOnly bool) error {
 		if err != nil {
 			return fmt.Errorf("opening existing database: %w", err)
 		}
-		defer destDB.Close()
+		defer func() { _ = destDB.Close() }()
 
 		if err := generateAllSummaries(destDB); err != nil {
 			return fmt.Errorf("generating summaries: %w", err)
@@ -80,7 +82,7 @@ func run(backupsPath, destPath string, summariesOnly bool) error {
 	if err != nil {
 		return fmt.Errorf("creating consolidated database: %w", err)
 	}
-	defer destDB.Close()
+	defer func() { _ = destDB.Close() }()
 
 	// Apply bulk import optimizations
 	if err := applyBulkPragmas(destDB); err != nil {
@@ -154,7 +156,7 @@ func processBackup(zipPath string, destDB *sql.DB, seenKeys map[[16]byte]struct{
 	if err != nil {
 		return 0, fmt.Errorf("creating temp directory: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Extract insights.db from zip
 	dbPath, err := extractDB(zipPath, tempDir)
@@ -167,7 +169,7 @@ func processBackup(zipPath string, destDB *sql.DB, seenKeys map[[16]byte]struct{
 	if err != nil {
 		return 0, fmt.Errorf("opening source database: %w", err)
 	}
-	defer srcDB.Close()
+	defer func() { _ = srcDB.Close() }()
 
 	// Import data
 	return importData(zipPath, srcDB, destDB, seenKeys)
@@ -178,7 +180,7 @@ func extractDB(zipPath, destDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	var dbFile *zip.File
 	for _, f := range r.File {
@@ -209,7 +211,7 @@ func extractDB(zipPath, destDir string) (string, error) {
 		}
 		base := filepath.Base(f.Name)
 		if base == "insights.db-wal" || base == "insights.db-shm" {
-			extractFile(f, filepath.Join(destDir, base))
+			_ = extractFile(f, filepath.Join(destDir, base))
 		}
 	}
 
@@ -221,15 +223,15 @@ func extractFile(f *zip.File, destPath string) error {
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
-	outFile, err := os.Create(destPath)
+	outFile, err := os.Create(destPath) //#nosec G304 -- destPath is controlled
 	if err != nil {
 		return err
 	}
-	defer outFile.Close()
+	defer func() { _ = outFile.Close() }()
 
-	_, err = io.Copy(outFile, rc)
+	_, err = io.Copy(outFile, rc) //#nosec G110 -- src is controlled
 	return err
 }
 
@@ -293,7 +295,7 @@ func createIndexes(db *sql.DB) error {
 
 // hashKey creates an MD5 hash of the (id, time) pair for deduplication
 func hashKey(id, t string) [16]byte {
-	return md5.Sum([]byte(id + "\x00" + t))
+	return md5.Sum([]byte(id + "\x00" + t)) //#nosec G401 -- used only for deduplication, not security
 }
 
 func importData(srcName string, srcDB, destDB *sql.DB, seenKeys map[[16]byte]struct{}) (int64, error) {
@@ -309,7 +311,7 @@ func importData(srcName string, srcDB, destDB *sql.DB, seenKeys map[[16]byte]str
 	if err != nil {
 		return 0, fmt.Errorf("querying source database: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	description := fmt.Sprintf("  %s", filepath.Base(srcName))
 	bar := progressbar.NewOptions64(rowCount,
@@ -336,7 +338,7 @@ func importData(srcName string, srcDB, destDB *sql.DB, seenKeys map[[16]byte]str
 		key := hashKey(r.id, r.t)
 		if _, seen := seenKeys[key]; seen {
 			if totalScanned%int64(batchSize) == 0 {
-				bar.Add(batchSize)
+				_ = bar.Add(batchSize)
 			}
 			continue
 		}
@@ -350,7 +352,7 @@ func importData(srcName string, srcDB, destDB *sql.DB, seenKeys map[[16]byte]str
 				return totalImported, err
 			}
 			totalImported += imported
-			bar.Set64(totalScanned)
+			_ = bar.Set64(totalScanned)
 			batch = batch[:0]
 		}
 	}
@@ -363,7 +365,7 @@ func importData(srcName string, srcDB, destDB *sql.DB, seenKeys map[[16]byte]str
 		}
 		totalImported += imported
 	}
-	bar.Set64(totalScanned)
+	_ = bar.Set64(totalScanned)
 
 	fmt.Println() // newline after progress bar
 	return totalImported, rows.Err()
@@ -391,13 +393,13 @@ func insertBatch(db *sql.DB, batch []row) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("beginning transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Cache prepared statements within this transaction
 	txStmtCache := make(map[int]*sql.Stmt)
 	defer func() {
 		for _, stmt := range txStmtCache {
-			stmt.Close()
+			_ = stmt.Close()
 		}
 	}()
 
@@ -450,7 +452,7 @@ func generateAllSummaries(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("querying dates: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var dates []string
 	for rows.Next() {
@@ -475,14 +477,14 @@ func generateAllSummaries(db *sql.DB) error {
 		date, err := parseDate(dateStr)
 		if err != nil {
 			log.Printf("\nWarning: skipping invalid date %s: %v", dateStr, err)
-			bar.Add(1)
+			_ = bar.Add(1)
 			continue
 		}
 
 		if err := summary.SummarizeData(db, date); err != nil {
 			log.Printf("\nWarning: error summarizing %s: %v", dateStr, err)
 		}
-		bar.Add(1)
+		_ = bar.Add(1)
 	}
 	fmt.Println() // newline after progress bar
 

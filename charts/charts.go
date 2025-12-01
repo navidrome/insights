@@ -554,7 +554,7 @@ func buildPlayersPerInstallationChart(summaries []summary.SummaryRecord) *charts
 	binValues := make([]uint64, len(bins))
 	for countStr, value := range latest.Data.Players {
 		var count int
-		fmt.Sscanf(countStr, "%d", &count)
+		_, _ = fmt.Sscanf(countStr, "%d", &count)
 
 		for i, bin := range bins {
 			if count >= bin.min && (bin.max == -1 || count <= bin.max) {
@@ -887,13 +887,13 @@ func ExportChartsJSON(outputDir string) error {
 	}
 
 	// Ensure output directory exists
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
 		return err
 	}
 
 	// Write to file
 	outputPath := filepath.Join(outputDir, "charts.json")
-	if err := os.WriteFile(outputPath, jsonData, 0644); err != nil {
+	if err := os.WriteFile(outputPath, jsonData, 0600); err != nil {
 		return err
 	}
 

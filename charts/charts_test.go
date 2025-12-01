@@ -30,12 +30,12 @@ var _ = Describe("Charts", func() {
 
 		// Set DATA_FOLDER to temp directory for tests
 		originalDataFolder = os.Getenv("DATA_FOLDER")
-		os.Setenv("DATA_FOLDER", tempDir)
+		Expect(os.Setenv("DATA_FOLDER", tempDir)).To(Succeed())
 	})
 
 	AfterEach(func() {
-		os.RemoveAll(tempDir)
-		os.Setenv("DATA_FOLDER", originalDataFolder)
+		Expect(os.RemoveAll(tempDir)).To(Succeed())
+		Expect(os.Setenv("DATA_FOLDER", originalDataFolder)).To(Succeed())
 	})
 
 	Describe("ExcludeIncompleteDays", func() {
@@ -525,7 +525,7 @@ var _ = Describe("Charts", func() {
 		})
 
 		AfterEach(func() {
-			os.RemoveAll(outputDir)
+			Expect(os.RemoveAll(outputDir)).To(Succeed())
 		})
 
 		It("does nothing when no summaries exist", func() {
@@ -559,7 +559,7 @@ var _ = Describe("Charts", func() {
 
 			// Verify file exists
 			jsonPath := filepath.Join(outputDir, "charts.json")
-			data, err := os.ReadFile(jsonPath)
+			data, err := os.ReadFile(jsonPath) //#nosec G304 -- test file path
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify JSON structure (array of charts)

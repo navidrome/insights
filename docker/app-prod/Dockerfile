@@ -11,7 +11,7 @@ ENV CGO_ENABLED=1
 RUN --mount=type=bind,source=. \
     --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/go/pkg/mod \
-    go build -o /insights
+    go build -o /insights ./cmd/server
 
 FROM scratch AS binary
 COPY --from=build /insights /insights

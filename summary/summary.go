@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,6 +15,15 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
+
+// Stats holds statistical metrics for a numeric field
+type Stats struct {
+	Min    int64   `json:"min"`
+	Max    int64   `json:"max"`
+	Mean   float64 `json:"mean"`
+	Median float64 `json:"median"`
+	StdDev float64 `json:"stdDev"`
+}
 
 type Summary struct {
 	NumInstances   int64             `json:"numInstances,omitempty"`
@@ -25,10 +35,17 @@ type Summary struct {
 	Players        map[string]uint64 `json:"players,omitempty"`
 	Users          map[string]uint64 `json:"users,omitempty"`
 	Tracks         map[string]uint64 `json:"tracks,omitempty"`
+	Albums         map[string]uint64 `json:"albums,omitempty"`
+	Artists        map[string]uint64 `json:"artists,omitempty"`
 	MusicFS        map[string]uint64 `json:"musicFS,omitempty"`
 	DataFS         map[string]uint64 `json:"dataFS,omitempty"`
-	LibSizeAverage int64             `json:"libSizeAverage,omitempty"`
-	LibSizeStdDev  float64           `json:"libSizeStdDev,omitempty"`
+	TrackStats     *Stats            `json:"trackStats,omitempty"`
+	AlbumStats     *Stats            `json:"albumStats,omitempty"`
+	ArtistStats    *Stats            `json:"artistStats,omitempty"`
+	PlaylistStats  *Stats            `json:"playlistStats,omitempty"`
+	ShareStats     *Stats            `json:"shareStats,omitempty"`
+	RadioStats     *Stats            `json:"radioStats,omitempty"`
+	LibraryStats   *Stats            `json:"libraryStats,omitempty"`
 }
 
 func SummarizeData(dbConn *sql.DB, date time.Time) error {
@@ -45,12 +62,16 @@ func SummarizeData(dbConn *sql.DB, date time.Time) error {
 		Players:     make(map[string]uint64),
 		Users:       make(map[string]uint64),
 		Tracks:      make(map[string]uint64),
+		Albums:      make(map[string]uint64),
+		Artists:     make(map[string]uint64),
 		MusicFS:     make(map[string]uint64),
 		DataFS:      make(map[string]uint64),
 	}
-	var numInstances int64
-	var sumTracks int64
-	var sumTracksSquared int64
+
+	// Collect values for statistics calculation
+	var trackValues, albumValues, artistValues []int64
+	var playlistValues, shareValues, radioValues, libraryValues []int64
+
 	for data := range rows {
 		// Summarize data here
 		summary.NumInstances++
@@ -65,21 +86,42 @@ func SummarizeData(dbConn *sql.DB, date time.Time) error {
 		summary.DataFS[mapFS(data.FS.Data)]++
 		totalPlayers := mapPlayerTypes(data, summary.PlayerTypes)
 		summary.Players[fmt.Sprintf("%d", totalPlayers)]++
+
+		// Bin tracks, albums, and artists
 		mapToBins(data.Library.Tracks, TrackBins, summary.Tracks)
+		mapToBins(data.Library.Albums, AlbumBins, summary.Albums)
+		mapToBins(data.Library.Artists, ArtistBins, summary.Artists)
+
+		// Collect values for statistics (only non-zero for tracks, albums, artists)
 		if data.Library.Tracks > 0 {
-			sumTracks += data.Library.Tracks
-			sumTracksSquared += data.Library.Tracks * data.Library.Tracks
-			numInstances++
+			trackValues = append(trackValues, data.Library.Tracks)
 		}
+		if data.Library.Albums > 0 {
+			albumValues = append(albumValues, data.Library.Albums)
+		}
+		if data.Library.Artists > 0 {
+			artistValues = append(artistValues, data.Library.Artists)
+		}
+		// Collect all values for playlists, shares, radios, libraries (including zeros)
+		playlistValues = append(playlistValues, data.Library.Playlists)
+		shareValues = append(shareValues, data.Library.Shares)
+		radioValues = append(radioValues, data.Library.Radios)
+		libraryValues = append(libraryValues, data.Library.Libraries)
 	}
-	if numInstances == 0 {
+
+	if summary.NumInstances == 0 {
 		log.Printf("No data to summarize for %s", date.Format("2006-01-02"))
 		return nil
 	}
-	summary.LibSizeAverage = sumTracks / numInstances
-	mean := float64(sumTracks) / float64(numInstances)
-	variance := float64(sumTracksSquared)/float64(numInstances) - mean*mean
-	summary.LibSizeStdDev = math.Sqrt(variance)
+
+	// Calculate statistics for all fields
+	summary.TrackStats = calcStats(trackValues)
+	summary.AlbumStats = calcStats(albumValues)
+	summary.ArtistStats = calcStats(artistValues)
+	summary.PlaylistStats = calcStats(playlistValues)
+	summary.ShareStats = calcStats(shareValues)
+	summary.RadioStats = calcStats(radioValues)
+	summary.LibraryStats = calcStats(libraryValues)
 
 	// Save summary to file
 	err = SaveSummary(summary, date)
@@ -87,6 +129,53 @@ func SummarizeData(dbConn *sql.DB, date time.Time) error {
 		log.Printf("Error saving summary: %s", err)
 	}
 	return err
+}
+
+// calcStats computes min, max, mean, median, and standard deviation for a slice of values
+func calcStats(values []int64) *Stats {
+	if len(values) == 0 {
+		return nil
+	}
+
+	// Sort for median calculation
+	sorted := make([]int64, len(values))
+	copy(sorted, values)
+	slices.Sort(sorted)
+
+	n := len(sorted)
+	minVal := sorted[0]
+	maxVal := sorted[n-1]
+
+	// Calculate mean
+	var sum int64
+	for _, v := range sorted {
+		sum += v
+	}
+	mean := float64(sum) / float64(n)
+
+	// Calculate median
+	var median float64
+	if n%2 == 0 {
+		median = float64(sorted[n/2-1]+sorted[n/2]) / 2
+	} else {
+		median = float64(sorted[n/2])
+	}
+
+	// Calculate standard deviation
+	var sumSquaredDiff float64
+	for _, v := range sorted {
+		diff := float64(v) - mean
+		sumSquaredDiff += diff * diff
+	}
+	stdDev := math.Sqrt(sumSquaredDiff / float64(n))
+
+	return &Stats{
+		Min:    minVal,
+		Max:    maxVal,
+		Mean:   mean,
+		Median: median,
+		StdDev: stdDev,
+	}
 }
 
 // Match the first 8 characters of a git sha
@@ -97,6 +186,8 @@ func mapVersion(data insights.Data) string {
 }
 
 var TrackBins = []int64{0, 1, 100, 500, 1000, 5000, 10000, 20000, 50000, 100000, 500000, 1000000}
+var AlbumBins = []int64{0, 1, 10, 50, 100, 500, 1000, 2000, 5000, 10000, 50000, 100000}
+var ArtistBins = []int64{0, 1, 10, 50, 100, 500, 1000, 2000, 5000, 10000, 50000, 100000}
 
 func mapToBins(count int64, bins []int64, counters map[string]uint64) {
 	for i := range bins {

@@ -20,34 +20,59 @@ import (
 )
 
 func main() {
-	backupsPath := flag.String("backups", "", "Path to the folder containing backup zip files (required)")
+	backupsPath := flag.String("backups", "", "Path to the folder containing backup zip files (required for merge)")
 	destPath := flag.String("dest", "", "Destination folder for consolidated DB and summaries (required)")
+	summariesOnly := flag.Bool("summaries-only", false, "Skip DB merge and only regenerate summaries from existing DB")
 	flag.Parse()
 
-	if *backupsPath == "" || *destPath == "" {
+	if *destPath == "" {
 		flag.Usage()
 		os.Exit(1)
 	}
 
-	if err := run(*backupsPath, *destPath); err != nil {
+	if !*summariesOnly && *backupsPath == "" {
+		fmt.Fprintf(os.Stderr, "Error: -backups is required unless -summaries-only is set\n")
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	if err := run(*backupsPath, *destPath, *summariesOnly); err != nil {
 		log.Fatalf("Error: %v", err)
 	}
 }
 
-func run(backupsPath, destPath string) error {
+func run(backupsPath, destPath string, summariesOnly bool) error {
 	// Ensure destination folder exists
 	if err := os.MkdirAll(destPath, 0755); err != nil {
 		return fmt.Errorf("creating destination folder: %w", err)
 	}
 
-	// Check if output database already exists
+	// Set DATA_FOLDER for summary storage
+	os.Setenv("DATA_FOLDER", destPath)
+
 	consolidatedDBPath := filepath.Join(destPath, "insights.db")
+
+	// If summaries-only mode, just regenerate summaries from existing DB
+	if summariesOnly {
+		log.Printf("Summaries-only mode: regenerating summaries from existing database")
+		destDB, err := db.OpenDB(consolidatedDBPath)
+		if err != nil {
+			return fmt.Errorf("opening existing database: %w", err)
+		}
+		defer destDB.Close()
+
+		if err := generateAllSummaries(destDB); err != nil {
+			return fmt.Errorf("generating summaries: %w", err)
+		}
+
+		log.Printf("Summary regeneration complete!")
+		return nil
+	}
+
+	// Check if output database already exists
 	if _, err := os.Stat(consolidatedDBPath); err == nil {
 		return fmt.Errorf("destination database already exists: %s", consolidatedDBPath)
 	}
-
-	// Set DATA_FOLDER for summary storage
-	os.Setenv("DATA_FOLDER", destPath)
 
 	// Create consolidated database (without indexes for faster inserts)
 	log.Printf("Creating consolidated database: %s", consolidatedDBPath)

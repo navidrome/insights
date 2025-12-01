@@ -79,6 +79,54 @@ var _ = Describe("Summary", func() {
 		Entry("should map bsd to BSD", "FreeBSD - x86_64", insights.Data{OS: insightsOS{Type: "freebsd", Arch: "x86_64"}}),
 		Entry("should map unknown OS types", "Unknown - x86_64", insights.Data{OS: insightsOS{Type: "unknown", Arch: "x86_64"}}),
 	)
+	Describe("calcStats", func() {
+		It("should return nil for empty slice", func() {
+			Expect(calcStats([]int64{})).To(BeNil())
+		})
+
+		It("should calculate stats for a single value", func() {
+			stats := calcStats([]int64{42})
+			Expect(stats.Min).To(Equal(int64(42)))
+			Expect(stats.Max).To(Equal(int64(42)))
+			Expect(stats.Mean).To(Equal(float64(42)))
+			Expect(stats.Median).To(Equal(float64(42)))
+			Expect(stats.StdDev).To(Equal(float64(0)))
+		})
+
+		It("should calculate stats for odd number of values", func() {
+			stats := calcStats([]int64{1, 2, 3, 4, 5})
+			Expect(stats.Min).To(Equal(int64(1)))
+			Expect(stats.Max).To(Equal(int64(5)))
+			Expect(stats.Mean).To(Equal(float64(3)))
+			Expect(stats.Median).To(Equal(float64(3)))
+			Expect(stats.StdDev).To(BeNumerically("~", 1.414, 0.001))
+		})
+
+		It("should calculate stats for even number of values", func() {
+			stats := calcStats([]int64{1, 2, 3, 4})
+			Expect(stats.Min).To(Equal(int64(1)))
+			Expect(stats.Max).To(Equal(int64(4)))
+			Expect(stats.Mean).To(Equal(float64(2.5)))
+			Expect(stats.Median).To(Equal(float64(2.5)))
+			Expect(stats.StdDev).To(BeNumerically("~", 1.118, 0.001))
+		})
+
+		It("should handle unsorted input", func() {
+			stats := calcStats([]int64{5, 1, 3, 2, 4})
+			Expect(stats.Min).To(Equal(int64(1)))
+			Expect(stats.Max).To(Equal(int64(5)))
+			Expect(stats.Median).To(Equal(float64(3)))
+		})
+
+		It("should handle values with zeros", func() {
+			stats := calcStats([]int64{0, 0, 10, 20})
+			Expect(stats.Min).To(Equal(int64(0)))
+			Expect(stats.Max).To(Equal(int64(20)))
+			Expect(stats.Mean).To(Equal(float64(7.5)))
+			Expect(stats.Median).To(Equal(float64(5)))
+		})
+	})
+
 	DescribeTable("mapPlayerTypes",
 		func(data insights.Data, expected map[string]uint64) {
 			players := make(map[string]uint64)

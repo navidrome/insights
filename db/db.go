@@ -59,9 +59,9 @@ func SaveReport(db *sql.DB, data insights.Data, t time.Time) error {
 }
 
 func PurgeOldEntries(db *sql.DB) error {
-	// Delete entries older than 30 days
+	// Delete entries older than 60 days
 	query := `DELETE FROM insights WHERE time < ?`
-	cnt, err := db.Exec(query, time.Now().Add(-30*24*time.Hour))
+	cnt, err := db.Exec(query, time.Now().Add(-60*24*time.Hour))
 	if err != nil {
 		return err
 	}

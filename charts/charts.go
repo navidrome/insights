@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/components"
@@ -46,6 +47,117 @@ const (
 	topVersions = 15
 )
 
+// timeSeriesData holds a continuous date range with data for each date.
+// Dates without data will have nil in the lookup map.
+type timeSeriesData struct {
+	Dates  []string                             // Continuous date range as formatted strings
+	Lookup map[time.Time]*summary.SummaryRecord // Map from date to summary (nil if missing)
+	Start  time.Time                            // First date in the range
+}
+
+// gapRange represents a range of missing data
+type gapRange struct {
+	StartDate string // Formatted start date of gap
+	EndDate   string // Formatted end date of gap
+}
+
+// buildTimeSeriesData creates a continuous date range from the first to last summary,
+// filling gaps with nil values to show breaks in time series charts.
+func buildTimeSeriesData(summaries []summary.SummaryRecord) timeSeriesData {
+	if len(summaries) == 0 {
+		return timeSeriesData{}
+	}
+
+	// Build lookup map from date to summary
+	lookup := make(map[time.Time]*summary.SummaryRecord, len(summaries))
+	for i := range summaries {
+		lookup[summaries[i].Time] = &summaries[i]
+	}
+
+	// Generate continuous date range
+	start := summaries[0].Time
+	end := summaries[len(summaries)-1].Time
+
+	var dates []string
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		dates = append(dates, d.Format("Jan 02, 2006"))
+	}
+
+	return timeSeriesData{Dates: dates, Lookup: lookup, Start: start}
+}
+
+// findGaps returns the ranges of missing data in the time series
+func (ts timeSeriesData) findGaps() []gapRange {
+	if len(ts.Dates) == 0 {
+		return nil
+	}
+
+	var gaps []gapRange
+	var gapStart time.Time
+	inGap := false
+
+	for i := range ts.Dates {
+		date := ts.Start.AddDate(0, 0, i)
+		hasData := ts.Lookup[date] != nil
+
+		if !hasData && !inGap {
+			// Start of a new gap
+			gapStart = date
+			inGap = true
+		} else if hasData && inGap {
+			// End of gap (previous day was the last gap day)
+			gapEnd := date.AddDate(0, 0, -1)
+			gaps = append(gaps, gapRange{
+				StartDate: gapStart.Format("Jan 02, 2006"),
+				EndDate:   gapEnd.Format("Jan 02, 2006"),
+			})
+			inGap = false
+		}
+	}
+
+	// Handle gap that extends to the end
+	if inGap {
+		lastDate := ts.Start.AddDate(0, 0, len(ts.Dates)-1)
+		gaps = append(gaps, gapRange{
+			StartDate: gapStart.Format("Jan 02, 2006"),
+			EndDate:   lastDate.Format("Jan 02, 2006"),
+		})
+	}
+
+	return gaps
+}
+
+// buildMarkAreaData creates MarkArea data pairs for highlighting gaps
+func buildMarkAreaData(gaps []gapRange) [][]opts.MarkAreaData {
+	if len(gaps) == 0 {
+		return nil
+	}
+
+	var areas [][]opts.MarkAreaData
+	for _, gap := range gaps {
+		areas = append(areas, []opts.MarkAreaData{
+			{
+				Name:  "Missing Data",
+				XAxis: gap.StartDate,
+				MarkAreaStyle: opts.MarkAreaStyle{
+					ItemStyle: &opts.ItemStyle{
+						Color: "rgba(200, 200, 200, 0.3)",
+					},
+					Label: &opts.Label{
+						Show:     opts.Bool(true),
+						Position: "inside",
+						Color:    "#888888",
+					},
+				},
+			},
+			{
+				XAxis: gap.EndDate,
+			},
+		})
+	}
+	return areas
+}
+
 func ChartsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		summaries, err := summary.GetSummaries()
@@ -79,19 +191,15 @@ func ChartsHandler() http.HandlerFunc {
 }
 
 func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
-	// Build X-axis dates
-	dates := make([]string, len(summaries))
-	for i, s := range summaries {
-		dates[i] = s.Time.Format("Jan 02, 2006")
-	}
+	// Build continuous date range with gaps
+	ts := buildTimeSeriesData(summaries)
+	start := summaries[0].Time
 
-	// Collect all versions and their total counts, plus "All" totals
+	// Collect all versions and their total counts
 	versionTotals := make(map[string]uint64)
-	allTotals := make([]uint64, len(summaries))
-	for i, s := range summaries {
+	for _, s := range summaries {
 		for version, count := range s.Data.Versions {
 			versionTotals[version] += count
-			allTotals[i] += count
 		}
 	}
 
@@ -105,6 +213,12 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 		countB := lastSummary.Data.Versions[b]
 		return cmp.Compare(countB, countA)
 	})
+
+	// Create a set of top versions for quick lookup
+	topVersionsSet := make(map[string]bool)
+	for _, v := range topVersionsList {
+		topVersionsSet[v] = true
+	}
 
 	// Create line chart
 	line := charts.NewLine()
@@ -151,41 +265,53 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 		}),
 	)
 
-	line.SetXAxis(dates)
+	line.SetXAxis(ts.Dates)
 
-	// Add "All" series first (total installations)
-	allData := make([]opts.LineData, len(summaries))
-	for i, total := range allTotals {
-		allData[i] = opts.LineData{Value: total}
-	}
-	line.AddSeries("All", allData)
+	// Build series data with nil for missing dates
+	allData := make([]opts.LineData, len(ts.Dates))
+	versionData := make(map[string][]opts.LineData)
+	othersData := make([]opts.LineData, len(ts.Dates))
 
-	// Create a set of top versions for quick lookup
-	topVersionsSet := make(map[string]bool)
-	for _, v := range topVersionsList {
-		topVersionsSet[v] = true
-	}
-
-	// Add series for each version
 	for _, version := range topVersionsList {
-		data := make([]opts.LineData, len(summaries))
-		for i, s := range summaries {
-			count := s.Data.Versions[version]
-			data[i] = opts.LineData{Value: count}
-		}
-		line.AddSeries(version, data)
+		versionData[version] = make([]opts.LineData, len(ts.Dates))
 	}
 
-	// Add "Others" series for versions not in top list
-	othersData := make([]opts.LineData, len(summaries))
-	for i, s := range summaries {
-		var othersCount uint64
-		for version, count := range s.Data.Versions {
-			if !topVersionsSet[version] {
-				othersCount += count
+	for i := range ts.Dates {
+		date := start.AddDate(0, 0, i)
+		s := ts.Lookup[date]
+		if s == nil {
+			// No data for this date - use nil to create gap
+			allData[i] = opts.LineData{Value: nil}
+			for _, version := range topVersionsList {
+				versionData[version][i] = opts.LineData{Value: nil}
 			}
+			othersData[i] = opts.LineData{Value: nil}
+		} else {
+			// Calculate totals for this day
+			var allTotal uint64
+			var othersCount uint64
+			for version, count := range s.Data.Versions {
+				allTotal += count
+				if !topVersionsSet[version] {
+					othersCount += count
+				}
+			}
+			allData[i] = opts.LineData{Value: allTotal}
+			for _, version := range topVersionsList {
+				versionData[version][i] = opts.LineData{Value: s.Data.Versions[version]}
+			}
+			othersData[i] = opts.LineData{Value: othersCount}
 		}
-		othersData[i] = opts.LineData{Value: othersCount}
+	}
+
+	// Find gaps and create mark areas
+	gaps := ts.findGaps()
+	markAreas := buildMarkAreaData(gaps)
+
+	// Add series - first series gets the mark areas
+	line.AddSeries("All", allData, charts.WithMarkAreaData(markAreas...))
+	for _, version := range topVersionsList {
+		line.AddSeries(version, versionData[version])
 	}
 	line.AddSeries("Others", othersData)
 
@@ -324,10 +450,9 @@ func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
 }
 
 func buildPlayersChart(summaries []summary.SummaryRecord) *charts.Line {
-	dates := make([]string, len(summaries))
-	for i, s := range summaries {
-		dates[i] = s.Time.Format("Jan 02, 2006")
-	}
+	// Build continuous date range with gaps
+	ts := buildTimeSeriesData(summaries)
+	start := summaries[0].Time
 
 	line := charts.NewLine()
 	line.SetGlobalOptions(
@@ -370,18 +495,29 @@ func buildPlayersChart(summaries []summary.SummaryRecord) *charts.Line {
 		}),
 	)
 
-	line.SetXAxis(dates)
+	line.SetXAxis(ts.Dates)
 
-	// Calculate total players for each summary
-	totalData := make([]opts.LineData, len(summaries))
-	for i, s := range summaries {
-		var total uint64
-		for _, count := range s.Data.PlayerTypes {
-			total += count
+	// Calculate total players for each date, with nil for missing dates
+	totalData := make([]opts.LineData, len(ts.Dates))
+	for i := range ts.Dates {
+		date := start.AddDate(0, 0, i)
+		s := ts.Lookup[date]
+		if s == nil {
+			totalData[i] = opts.LineData{Value: nil}
+		} else {
+			var total uint64
+			for _, count := range s.Data.PlayerTypes {
+				total += count
+			}
+			totalData[i] = opts.LineData{Value: total}
 		}
-		totalData[i] = opts.LineData{Value: total}
 	}
-	line.AddSeries("Total Clients", totalData)
+
+	// Find gaps and create mark areas
+	gaps := ts.findGaps()
+	markAreas := buildMarkAreaData(gaps)
+
+	line.AddSeries("Total Clients", totalData, charts.WithMarkAreaData(markAreas...))
 
 	line.SetSeriesOptions(
 		charts.WithLineChartOpts(opts.LineChart{Smooth: opts.Bool(true)}),

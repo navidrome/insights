@@ -74,6 +74,102 @@ var _ = Describe("Charts", func() {
 		})
 	})
 
+	Describe("buildTimeSeriesData", func() {
+		It("returns empty data for empty summaries", func() {
+			ts := buildTimeSeriesData([]summary.SummaryRecord{})
+			Expect(ts.Dates).To(BeEmpty())
+			Expect(ts.Lookup).To(BeEmpty())
+		})
+
+		It("creates continuous date range without gaps", func() {
+			summaries := []summary.SummaryRecord{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 100}},
+				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 110}},
+				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 120}},
+			}
+			ts := buildTimeSeriesData(summaries)
+			Expect(ts.Dates).To(HaveLen(3))
+			Expect(ts.Dates[0]).To(Equal("Jan 01, 2025"))
+			Expect(ts.Dates[1]).To(Equal("Jan 02, 2025"))
+			Expect(ts.Dates[2]).To(Equal("Jan 03, 2025"))
+			// All dates should have data
+			for i := 0; i < 3; i++ {
+				date := time.Date(2025, 1, i+1, 0, 0, 0, 0, time.UTC)
+				Expect(ts.Lookup[date]).NotTo(BeNil())
+			}
+		})
+
+		It("fills gaps in date range with nil entries", func() {
+			summaries := []summary.SummaryRecord{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 100}},
+				{Time: time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 150}},
+			}
+			ts := buildTimeSeriesData(summaries)
+			// Should have 5 dates: Jan 1, 2, 3, 4, 5
+			Expect(ts.Dates).To(HaveLen(5))
+			Expect(ts.Dates[0]).To(Equal("Jan 01, 2025"))
+			Expect(ts.Dates[4]).To(Equal("Jan 05, 2025"))
+			Expect(ts.Start).To(Equal(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)))
+
+			// Jan 1 and Jan 5 should have data
+			Expect(ts.Lookup[time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)]).NotTo(BeNil())
+			Expect(ts.Lookup[time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC)]).NotTo(BeNil())
+
+			// Jan 2, 3, 4 should be nil (missing data)
+			Expect(ts.Lookup[time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)]).To(BeNil())
+			Expect(ts.Lookup[time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC)]).To(BeNil())
+			Expect(ts.Lookup[time.Date(2025, 1, 4, 0, 0, 0, 0, time.UTC)]).To(BeNil())
+		})
+	})
+
+	Describe("findGaps", func() {
+		It("returns empty for empty time series", func() {
+			ts := buildTimeSeriesData([]summary.SummaryRecord{})
+			gaps := ts.findGaps()
+			Expect(gaps).To(BeEmpty())
+		})
+
+		It("returns empty when no gaps exist", func() {
+			summaries := []summary.SummaryRecord{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 100}},
+				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 110}},
+				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 120}},
+			}
+			ts := buildTimeSeriesData(summaries)
+			gaps := ts.findGaps()
+			Expect(gaps).To(BeEmpty())
+		})
+
+		It("finds a single gap", func() {
+			summaries := []summary.SummaryRecord{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 100}},
+				{Time: time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 150}},
+			}
+			ts := buildTimeSeriesData(summaries)
+			gaps := ts.findGaps()
+			Expect(gaps).To(HaveLen(1))
+			Expect(gaps[0].StartDate).To(Equal("Jan 02, 2025"))
+			Expect(gaps[0].EndDate).To(Equal("Jan 04, 2025"))
+		})
+
+		It("finds multiple gaps", func() {
+			summaries := []summary.SummaryRecord{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 100}},
+				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 110}},
+				{Time: time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 120}},
+			}
+			ts := buildTimeSeriesData(summaries)
+			gaps := ts.findGaps()
+			Expect(gaps).To(HaveLen(2))
+			// First gap: Jan 2
+			Expect(gaps[0].StartDate).To(Equal("Jan 02, 2025"))
+			Expect(gaps[0].EndDate).To(Equal("Jan 02, 2025"))
+			// Second gap: Jan 4-5
+			Expect(gaps[1].StartDate).To(Equal("Jan 04, 2025"))
+			Expect(gaps[1].EndDate).To(Equal("Jan 05, 2025"))
+		})
+	})
+
 	Describe("GetSummaries", func() {
 		It("returns empty slice when no summaries exist", func() {
 			summaries, err := summary.GetSummaries()

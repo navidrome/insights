@@ -19,8 +19,8 @@ const (
 
 // Data retention and summarization
 const (
-	SummarizeLookbackDays = 10
-	PurgeRetentionDays    = 60
+	SummarizeLookbackDays = 5
+	PurgeRetentionDays    = 33
 )
 
 // File paths and directories

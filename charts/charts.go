@@ -621,7 +621,7 @@ var trackBinLabels = []string{
 var albumArtistBinLabels = []string{
 	"0", "1-10", "11-50", "51-100", "101-500",
 	"501-1,000", "1,001-2,000", "2,001-5,000",
-	"5,001-10,000", "10,001-50,000", ">50,000",
+	"5,001-10,000", "10,001-50,000", "50,001-100,000", ">100,000",
 }
 
 func buildTracksChart(summaries []summary.SummaryRecord) *charts.Bar {
@@ -723,8 +723,8 @@ func buildAlbumsArtistsChart(summaries []summary.SummaryRecord) *charts.Bar {
 		"2000":   "2,001-5,000",
 		"5000":   "5,001-10,000",
 		"10000":  "10,001-50,000",
-		"50000":  ">50,000",
-		"100000": ">50,000", // Merge 50000 and 100000 into >50,000
+		"50000":  "50,001-100,000",
+		"100000": ">100,000",
 	}
 
 	// Build albums data

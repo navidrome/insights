@@ -10,6 +10,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/navidrome/insights/consts"
 	"github.com/navidrome/navidrome/core/metrics/insights"
 )
 
@@ -54,14 +55,14 @@ func SaveReport(db *sql.DB, data insights.Data, t time.Time) error {
 	}
 
 	query := `INSERT INTO insights (id, data, time) VALUES (?, ?, ?)`
-	_, err = db.Exec(query, data.InsightsID, dataJSON, t.Format("2006-01-02 15:04:05"))
+	_, err = db.Exec(query, data.InsightsID, dataJSON, t.Format(consts.DateTimeFormat))
 	return err
 }
 
 func PurgeOldEntries(db *sql.DB) error {
-	// Delete entries older than 60 days
+	// Delete entries older than configured retention period
 	query := `DELETE FROM insights WHERE time < ?`
-	cnt, err := db.Exec(query, time.Now().Add(-60*24*time.Hour))
+	cnt, err := db.Exec(query, time.Now().Add(-consts.PurgeRetentionDays*24*time.Hour))
 	if err != nil {
 		return err
 	}
@@ -82,7 +83,7 @@ INNER JOIN (
 ) i2 ON i1.id = i2.id AND i1.time = i2.max_time
 WHERE i1.time >= date(?) AND time < date(?, '+1 day')
 ORDER BY i1.id, i1.time DESC;`
-	d := date.Format("2006-01-02")
+	d := date.Format(consts.DateFormat)
 	rows, err := db.Query(query, d, d, d, d)
 	if err != nil {
 		return nil, fmt.Errorf("querying data: %w", err)

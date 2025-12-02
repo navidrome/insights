@@ -7,11 +7,10 @@ import (
 	"time"
 
 	"github.com/navidrome/insights/charts"
+	"github.com/navidrome/insights/consts"
 	"github.com/navidrome/insights/db"
 	"github.com/navidrome/insights/summary"
 )
-
-const chartDataDir = "web/chartdata"
 
 func cleanup(_ context.Context, dbConn *sql.DB) func() {
 	return func() {
@@ -26,9 +25,9 @@ func summarize(_ context.Context, dbConn *sql.DB) func() {
 	return func() {
 		log.Print("Summarizing data")
 		now := time.Now().Truncate(24 * time.Hour).UTC()
-		for d := 0; d < 10; d++ {
+		for d := 0; d < consts.SummarizeLookbackDays; d++ {
 			date := now.AddDate(0, 0, -d)
-			log.Print("Summarizing data for ", date.Format("2006-01-02"))
+			log.Print("Summarizing data for ", date.Format(consts.DateFormat))
 			_ = summary.SummarizeData(dbConn, date)
 		}
 	}
@@ -37,7 +36,7 @@ func summarize(_ context.Context, dbConn *sql.DB) func() {
 func generateCharts(_ context.Context) func() {
 	return func() {
 		log.Print("Exporting charts JSON")
-		if err := charts.ExportChartsJSON(chartDataDir); err != nil {
+		if err := charts.ExportChartsJSON(consts.ChartDataDir); err != nil {
 			log.Printf("Error exporting charts JSON: %v", err)
 		}
 	}

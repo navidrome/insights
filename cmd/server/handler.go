@@ -6,9 +6,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/navidrome/insights/consts"
 	"github.com/navidrome/insights/db"
 	"github.com/navidrome/navidrome/core/metrics/insights"
 )
@@ -54,15 +56,15 @@ func apiKeyMiddleware(next http.Handler) http.Handler {
 
 		// Check Authorization header
 		authHeader := r.Header.Get("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			if strings.TrimPrefix(authHeader, "Bearer ") == apiKey {
+		if strings.HasPrefix(authHeader, consts.AuthHeaderPrefix) {
+			if strings.TrimPrefix(authHeader, consts.AuthHeaderPrefix) == apiKey {
 				next.ServeHTTP(w, r)
 				return
 			}
 		}
 
 		// Check query parameter
-		if r.URL.Query().Get("api_key") == apiKey {
+		if r.URL.Query().Get(consts.APIKeyQueryParam) == apiKey {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -74,12 +76,12 @@ func apiKeyMiddleware(next http.Handler) http.Handler {
 // chartsJSONHandler serves the charts.json file directly.
 func chartsJSONHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		filePath := "web/chartdata/charts.json"
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		chartsPath := filepath.Join(consts.ChartDataDir, consts.ChartsJSONFile)
+		if _, err := os.Stat(chartsPath); os.IsNotExist(err) {
 			http.Error(w, "Charts data not available", http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		http.ServeFile(w, r, filePath)
+		http.ServeFile(w, r, chartsPath)
 	}
 }

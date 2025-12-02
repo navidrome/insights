@@ -15,6 +15,7 @@ import (
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/components"
 	"github.com/go-echarts/go-echarts/v2/opts"
+	"github.com/navidrome/insights/consts"
 	"github.com/navidrome/insights/summary"
 )
 
@@ -31,7 +32,7 @@ func ExcludeIncompleteDays(summaries []summary.SummaryRecord) []summary.SummaryR
 		prev := summaries[len(summaries)-2]
 		if prev.Data.NumInstances > 0 {
 			dropRatio := float64(last.Data.NumInstances) / float64(prev.Data.NumInstances)
-			if dropRatio < 0.8 { // More than 20% drop indicates incomplete data
+			if dropRatio < consts.IncompleteThreshold { // Detect significant drop
 				summaries = summaries[:len(summaries)-1]
 				continue
 			}
@@ -40,12 +41,6 @@ func ExcludeIncompleteDays(summaries []summary.SummaryRecord) []summary.SummaryR
 	}
 	return summaries
 }
-
-const (
-	chartWidth  = "1400px"
-	chartHeight = "500px"
-	topVersions = 15
-)
 
 // timeSeriesData holds a continuous date range with data for each date.
 // Dates without data will have nil in the lookup map.
@@ -80,7 +75,7 @@ func buildTimeSeriesData(summaries []summary.SummaryRecord) timeSeriesData {
 
 	var dates []string
 	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
-		dates = append(dates, d.Format("Jan 02, 2006"))
+		dates = append(dates, d.Format(consts.ChartDateFormat))
 	}
 
 	return timeSeriesData{Dates: dates, Lookup: lookup, Start: start}
@@ -108,8 +103,8 @@ func (ts timeSeriesData) findGaps() []gapRange {
 			// End of gap (previous day was the last gap day)
 			gapEnd := date.AddDate(0, 0, -1)
 			gaps = append(gaps, gapRange{
-				StartDate: gapStart.Format("Jan 02, 2006"),
-				EndDate:   gapEnd.Format("Jan 02, 2006"),
+				StartDate: gapStart.Format(consts.ChartDateFormat),
+				EndDate:   gapEnd.Format(consts.ChartDateFormat),
 			})
 			inGap = false
 		}
@@ -119,8 +114,8 @@ func (ts timeSeriesData) findGaps() []gapRange {
 	if inGap {
 		lastDate := ts.Start.AddDate(0, 0, len(ts.Dates)-1)
 		gaps = append(gaps, gapRange{
-			StartDate: gapStart.Format("Jan 02, 2006"),
-			EndDate:   lastDate.Format("Jan 02, 2006"),
+			StartDate: gapStart.Format(consts.ChartDateFormat),
+			EndDate:   lastDate.Format(consts.ChartDateFormat),
 		})
 	}
 
@@ -141,12 +136,12 @@ func buildMarkAreaData(gaps []gapRange) [][]opts.MarkAreaData {
 				XAxis: gap.StartDate,
 				MarkAreaStyle: opts.MarkAreaStyle{
 					ItemStyle: &opts.ItemStyle{
-						Color: "rgba(200, 200, 200, 0.3)",
+						Color: consts.GapHighlightColor,
 					},
 					Label: &opts.Label{
 						Show:     opts.Bool(true),
 						Position: "inside",
-						Color:    "#888888",
+						Color:    consts.GapLabelColor,
 					},
 				},
 			},
@@ -204,7 +199,7 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 	}
 
 	// Get top N versions by total count
-	topVersionsList := getTopKeys(versionTotals, topVersions)
+	topVersionsList := getTopKeys(versionTotals, consts.TopVersionsCount)
 
 	// Sort versions by last day's count (highest to lowest)
 	lastSummary := summaries[len(summaries)-1]
@@ -224,13 +219,13 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 	line := charts.NewLine()
 	line.SetGlobalOptions(
 		charts.WithInitializationOpts(opts.Initialization{
-			Width:           chartWidth,
-			Height:          chartHeight,
-			BackgroundColor: "#ffffff",
+			Width:           consts.ChartWidth,
+			Height:          consts.ChartHeight,
+			BackgroundColor: consts.ChartBackgroundColor,
 		}),
 		charts.WithTitleOpts(opts.Title{
 			Title:      "Number of Navidrome Installations",
-			TitleStyle: &opts.TextStyle{Color: "#000000"},
+			TitleStyle: &opts.TextStyle{Color: consts.ChartTextColor},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
 			Show:    opts.Bool(true),
@@ -240,14 +235,14 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 			Show:      opts.Bool(true),
 			Right:     "10",
 			Orient:    "vertical",
-			TextStyle: &opts.TextStyle{Color: "#000000"},
+			TextStyle: &opts.TextStyle{Color: consts.ChartTextColor},
 		}),
 		charts.WithXAxisOpts(opts.XAxis{
 			Name:         "Date",
 			NameLocation: "center",
 			NameGap:      30,
 			AxisLabel: &opts.AxisLabel{
-				Color: "#000000",
+				Color: consts.ChartTextColor,
 			},
 		}),
 		charts.WithYAxisOpts(opts.YAxis{
@@ -255,7 +250,7 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 			NameLocation: "center",
 			NameGap:      50,
 			AxisLabel: &opts.AxisLabel{
-				Color: "#000000",
+				Color: consts.ChartTextColor,
 			},
 		}),
 		charts.WithGridOpts(opts.Grid{
@@ -342,13 +337,13 @@ func buildOSChart(summaries []summary.SummaryRecord) *charts.Pie {
 	pie := charts.NewPie()
 	pie.SetGlobalOptions(
 		charts.WithInitializationOpts(opts.Initialization{
-			Width:           chartWidth,
-			Height:          chartHeight,
-			BackgroundColor: "#ffffff",
+			Width:           consts.ChartWidth,
+			Height:          consts.ChartHeight,
+			BackgroundColor: consts.ChartBackgroundColor,
 		}),
 		charts.WithTitleOpts(opts.Title{
 			Title:      "Operating systems and architectures",
-			TitleStyle: &opts.TextStyle{Color: "#000000"},
+			TitleStyle: &opts.TextStyle{Color: consts.ChartTextColor},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
 			Show:      opts.Bool(true),
@@ -359,7 +354,7 @@ func buildOSChart(summaries []summary.SummaryRecord) *charts.Pie {
 			Show:      opts.Bool(true),
 			Right:     "10",
 			Orient:    "vertical",
-			TextStyle: &opts.TextStyle{Color: "#000000"},
+			TextStyle: &opts.TextStyle{Color: consts.ChartTextColor},
 			Type:      "scroll",
 		}),
 	)
@@ -390,8 +385,8 @@ func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
 		total += count
 	}
 
-	// Group players with less than 0.2% into "Others"
-	threshold := float64(total) * 0.002
+	// Group players with less than threshold into "Others"
+	threshold := float64(total) * consts.PlayerGroupThreshold
 	var data []opts.PieData
 	var othersCount uint64
 	for playerType, count := range latest.Data.PlayerTypes {
@@ -413,13 +408,13 @@ func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
 	pie := charts.NewPie()
 	pie.SetGlobalOptions(
 		charts.WithInitializationOpts(opts.Initialization{
-			Width:           chartWidth,
-			Height:          chartHeight,
-			BackgroundColor: "#ffffff",
+			Width:           consts.ChartWidth,
+			Height:          consts.ChartHeight,
+			BackgroundColor: consts.ChartBackgroundColor,
 		}),
 		charts.WithTitleOpts(opts.Title{
 			Title:      "Client types",
-			TitleStyle: &opts.TextStyle{Color: "#000000"},
+			TitleStyle: &opts.TextStyle{Color: consts.ChartTextColor},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
 			Show:      opts.Bool(true),
@@ -430,7 +425,7 @@ func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
 			Show:      opts.Bool(true),
 			Right:     "10",
 			Orient:    "vertical",
-			TextStyle: &opts.TextStyle{Color: "#000000"},
+			TextStyle: &opts.TextStyle{Color: consts.ChartTextColor},
 			Type:      "scroll",
 		}),
 	)
@@ -457,13 +452,13 @@ func buildPlayersChart(summaries []summary.SummaryRecord) *charts.Line {
 	line := charts.NewLine()
 	line.SetGlobalOptions(
 		charts.WithInitializationOpts(opts.Initialization{
-			Width:           chartWidth,
-			Height:          chartHeight,
-			BackgroundColor: "#ffffff",
+			Width:           consts.ChartWidth,
+			Height:          consts.ChartHeight,
+			BackgroundColor: consts.ChartBackgroundColor,
 		}),
 		charts.WithTitleOpts(opts.Title{
 			Title:      "Number of Active Clients",
-			TitleStyle: &opts.TextStyle{Color: "#000000"},
+			TitleStyle: &opts.TextStyle{Color: consts.ChartTextColor},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
 			Show:    opts.Bool(true),
@@ -477,7 +472,7 @@ func buildPlayersChart(summaries []summary.SummaryRecord) *charts.Line {
 			NameLocation: "center",
 			NameGap:      30,
 			AxisLabel: &opts.AxisLabel{
-				Color: "#000000",
+				Color: consts.ChartTextColor,
 			},
 		}),
 		charts.WithYAxisOpts(opts.YAxis{
@@ -485,7 +480,7 @@ func buildPlayersChart(summaries []summary.SummaryRecord) *charts.Line {
 			NameLocation: "center",
 			NameGap:      50,
 			AxisLabel: &opts.AxisLabel{
-				Color: "#000000",
+				Color: consts.ChartTextColor,
 			},
 		}),
 		charts.WithGridOpts(opts.Grid{
@@ -575,13 +570,13 @@ func buildPlayersPerInstallationChart(summaries []summary.SummaryRecord) *charts
 	bar := charts.NewBar()
 	bar.SetGlobalOptions(
 		charts.WithInitializationOpts(opts.Initialization{
-			Width:           chartWidth,
-			Height:          chartHeight,
-			BackgroundColor: "#ffffff",
+			Width:           consts.ChartWidth,
+			Height:          consts.ChartHeight,
+			BackgroundColor: consts.ChartBackgroundColor,
 		}),
 		charts.WithTitleOpts(opts.Title{
 			Title:      "Active Clients per Installation",
-			TitleStyle: &opts.TextStyle{Color: "#000000"},
+			TitleStyle: &opts.TextStyle{Color: consts.ChartTextColor},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
 			Show:    opts.Bool(true),
@@ -595,7 +590,7 @@ func buildPlayersPerInstallationChart(summaries []summary.SummaryRecord) *charts
 			NameLocation: "center",
 			NameGap:      30,
 			AxisLabel: &opts.AxisLabel{
-				Color: "#000000",
+				Color: consts.ChartTextColor,
 			},
 		}),
 		charts.WithYAxisOpts(opts.YAxis{
@@ -603,7 +598,7 @@ func buildPlayersPerInstallationChart(summaries []summary.SummaryRecord) *charts
 			NameLocation: "center",
 			NameGap:      50,
 			AxisLabel: &opts.AxisLabel{
-				Color: "#000000",
+				Color: consts.ChartTextColor,
 			},
 		}),
 		charts.WithGridOpts(opts.Grid{
@@ -666,13 +661,13 @@ func buildTracksChart(summaries []summary.SummaryRecord) *charts.Bar {
 	bar := charts.NewBar()
 	bar.SetGlobalOptions(
 		charts.WithInitializationOpts(opts.Initialization{
-			Width:           chartWidth,
-			Height:          chartHeight,
-			BackgroundColor: "#ffffff",
+			Width:           consts.ChartWidth,
+			Height:          consts.ChartHeight,
+			BackgroundColor: consts.ChartBackgroundColor,
 		}),
 		charts.WithTitleOpts(opts.Title{
 			Title:      "Number of Tracks in Library",
-			TitleStyle: &opts.TextStyle{Color: "#000000"},
+			TitleStyle: &opts.TextStyle{Color: consts.ChartTextColor},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
 			Show:    opts.Bool(true),
@@ -686,7 +681,7 @@ func buildTracksChart(summaries []summary.SummaryRecord) *charts.Bar {
 			NameLocation: "center",
 			NameGap:      30,
 			AxisLabel: &opts.AxisLabel{
-				Color: "#000000",
+				Color: consts.ChartTextColor,
 			},
 		}),
 		charts.WithYAxisOpts(opts.YAxis{
@@ -694,7 +689,7 @@ func buildTracksChart(summaries []summary.SummaryRecord) *charts.Bar {
 			NameLocation: "center",
 			NameGap:      130,
 			AxisLabel: &opts.AxisLabel{
-				Color: "#000000",
+				Color: consts.ChartTextColor,
 			},
 		}),
 		charts.WithGridOpts(opts.Grid{
@@ -759,13 +754,13 @@ func buildAlbumsArtistsChart(summaries []summary.SummaryRecord) *charts.Bar {
 	bar := charts.NewBar()
 	bar.SetGlobalOptions(
 		charts.WithInitializationOpts(opts.Initialization{
-			Width:           chartWidth,
-			Height:          chartHeight,
-			BackgroundColor: "#ffffff",
+			Width:           consts.ChartWidth,
+			Height:          consts.ChartHeight,
+			BackgroundColor: consts.ChartBackgroundColor,
 		}),
 		charts.WithTitleOpts(opts.Title{
 			Title:      "Albums and Artists in Library",
-			TitleStyle: &opts.TextStyle{Color: "#000000"},
+			TitleStyle: &opts.TextStyle{Color: consts.ChartTextColor},
 		}),
 		charts.WithTooltipOpts(opts.Tooltip{
 			Show:    opts.Bool(true),
@@ -776,7 +771,7 @@ func buildAlbumsArtistsChart(summaries []summary.SummaryRecord) *charts.Bar {
 			Top:    "30",
 			Orient: "horizontal",
 			TextStyle: &opts.TextStyle{
-				Color: "#000000",
+				Color: consts.ChartTextColor,
 			},
 		}),
 		charts.WithXAxisOpts(opts.XAxis{
@@ -784,7 +779,7 @@ func buildAlbumsArtistsChart(summaries []summary.SummaryRecord) *charts.Bar {
 			NameLocation: "center",
 			NameGap:      30,
 			AxisLabel: &opts.AxisLabel{
-				Color: "#000000",
+				Color: consts.ChartTextColor,
 			},
 		}),
 		charts.WithYAxisOpts(opts.YAxis{
@@ -792,7 +787,7 @@ func buildAlbumsArtistsChart(summaries []summary.SummaryRecord) *charts.Bar {
 			NameLocation: "center",
 			NameGap:      100,
 			AxisLabel: &opts.AxisLabel{
-				Color: "#000000",
+				Color: consts.ChartTextColor,
 			},
 		}),
 		charts.WithGridOpts(opts.Grid{
@@ -887,13 +882,13 @@ func ExportChartsJSON(outputDir string) error {
 	}
 
 	// Ensure output directory exists
-	if err := os.MkdirAll(outputDir, 0750); err != nil {
+	if err := os.MkdirAll(outputDir, consts.DirPermissions); err != nil {
 		return err
 	}
 
 	// Write to file
-	outputPath := filepath.Join(outputDir, "charts.json")
-	if err := os.WriteFile(outputPath, jsonData, 0600); err != nil {
+	outputPath := filepath.Join(outputDir, consts.ChartsJSONFile)
+	if err := os.WriteFile(outputPath, jsonData, consts.FilePermissions); err != nil {
 		return err
 	}
 

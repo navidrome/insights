@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httprate"
+	"github.com/navidrome/insights/consts"
 	"github.com/navidrome/insights/db"
 	"github.com/robfig/cron/v3"
 )
@@ -19,16 +20,16 @@ import (
 func startTasks(ctx context.Context, dbConn *sql.DB) error {
 	c := cron.New(cron.WithLocation(time.UTC))
 	// Run summarize every 2 hours
-	_, err := c.AddFunc("0 */2 * * *", summarize(ctx, dbConn))
+	_, err := c.AddFunc(consts.CronSummarize, summarize(ctx, dbConn))
 	if err != nil {
 		return err
 	}
-	// Generate charts JSON once a day at 00:00 UTC
-	_, err = c.AddFunc("5 0 * * *", generateCharts(ctx))
+	// Generate charts JSON once a day at 00:05 UTC
+	_, err = c.AddFunc(consts.CronGenerateChart, generateCharts(ctx))
 	if err != nil {
 		return err
 	}
-	_, err = c.AddFunc("30 0 * * *", cleanup(ctx, dbConn))
+	_, err = c.AddFunc(consts.CronCleanup, cleanup(ctx, dbConn))
 	if err != nil {
 		return err
 	}
@@ -63,18 +64,18 @@ func main() {
 	r.With(apiKeyMiddleware).Get("/api/charts", chartsJSONHandler())
 
 	// Rate-limited collect endpoint
-	limiter := httprate.NewRateLimiter(1, 30*time.Minute, httprate.WithKeyByIP())
+	limiter := httprate.NewRateLimiter(consts.RateLimitRequests, consts.RateLimitWindow, httprate.WithKeyByIP())
 	r.With(limiter.Handler).Post("/collect", handler(dbConn))
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = consts.DefaultPort
 	}
 
 	log.Print("Starting Insights server on :" + port)
 	server := &http.Server{
 		Addr:              ":" + port,
-		ReadHeaderTimeout: 3 * time.Second,
+		ReadHeaderTimeout: consts.ReadHeaderTimeout,
 		Handler:           r,
 	}
 	err = server.ListenAndServe()

@@ -9,9 +9,9 @@ import (
 	"regexp"
 	"slices"
 	"time"
-)
 
-const summariesDir = "summaries"
+	"github.com/navidrome/insights/consts"
+)
 
 type SummaryRecord struct {
 	Time time.Time
@@ -22,10 +22,10 @@ func SummaryFilePath(t time.Time) string {
 	dataFolder := os.Getenv("DATA_FOLDER")
 	return filepath.Join(
 		dataFolder,
-		summariesDir,
+		consts.SummariesDir,
 		t.Format("2006"),
 		t.Format("01"),
-		"summary-"+t.Format("2006-01-02")+".json",
+		"summary-"+t.Format(consts.DateFormat)+".json",
 	)
 }
 
@@ -34,7 +34,7 @@ func SaveSummary(summary Summary, t time.Time) error {
 
 	// Create directory structure if needed
 	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if err := os.MkdirAll(dir, consts.DirPermissions); err != nil {
 		return err
 	}
 
@@ -44,7 +44,7 @@ func SaveSummary(summary Summary, t time.Time) error {
 		return err
 	}
 
-	return os.WriteFile(filePath, data, 0600)
+	return os.WriteFile(filePath, data, consts.FilePermissions)
 }
 
 // summaryFileRegex matches files like "summary-2025-11-29.json"
@@ -52,7 +52,7 @@ var summaryFileRegex = regexp.MustCompile(`^summary-(\d{4}-\d{2}-\d{2})\.json$`)
 
 func GetSummaries() ([]SummaryRecord, error) {
 	dataFolder := os.Getenv("DATA_FOLDER")
-	baseDir := filepath.Join(dataFolder, summariesDir)
+	baseDir := filepath.Join(dataFolder, consts.SummariesDir)
 
 	var summaries []SummaryRecord
 
@@ -77,7 +77,7 @@ func GetSummaries() ([]SummaryRecord, error) {
 
 		// Parse date from filename
 		dateStr := matches[1]
-		t, err := time.Parse("2006-01-02", dateStr)
+		t, err := time.Parse(consts.DateFormat, dateStr)
 		if err != nil {
 			log.Printf("Warning: skipping file with invalid date %s: %v", path, err)
 			return nil

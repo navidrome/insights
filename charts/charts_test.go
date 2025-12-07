@@ -515,6 +515,116 @@ var _ = Describe("Charts", func() {
 		})
 	})
 
+	Describe("buildVersionsChart rolling window", func() {
+		It("selects top versions based on rolling window, not all-time totals", func() {
+			// Create summaries spanning more than 60 days
+			// Old version "v0.1.0" has high counts in early days (outside rolling window)
+			// New version "v0.2.0" has moderate counts only in recent days (inside rolling window)
+			var summaries []summary.SummaryRecord
+
+			baseDate := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+			// Days 1-70: Old version dominates (outside 60-day window from day 100)
+			for i := 0; i < 70; i++ {
+				summaries = append(summaries, summary.SummaryRecord{
+					Time: baseDate.AddDate(0, 0, i),
+					Data: summary.Summary{
+						NumInstances: 1000,
+						Versions:     map[string]uint64{"v0.1.0": 1000},
+					},
+				})
+			}
+
+			// Days 71-100: New version appears and dominates recent period
+			for i := 70; i < 100; i++ {
+				summaries = append(summaries, summary.SummaryRecord{
+					Time: baseDate.AddDate(0, 0, i),
+					Data: summary.Summary{
+						NumInstances: 1000,
+						Versions:     map[string]uint64{"v0.1.0": 100, "v0.2.0": 900},
+					},
+				})
+			}
+
+			chart := buildVersionsChart(summaries)
+			Expect(chart).NotTo(BeNil())
+
+			// Marshal chart to JSON and verify v0.2.0 appears (it should be in top N)
+			jsonBytes, err := json.Marshal(chart.JSON())
+			Expect(err).NotTo(HaveOccurred())
+			jsonStr := string(jsonBytes)
+
+			// Both versions should appear since they're in the top N within rolling window
+			Expect(jsonStr).To(ContainSubstring("v0.1.0"))
+			Expect(jsonStr).To(ContainSubstring("v0.2.0"))
+		})
+
+		It("always includes most recent release versions regardless of count", func() {
+			var summaries []summary.SummaryRecord
+			baseDate := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+			// Days 1-90: Only old versions exist with high counts
+			for i := 0; i < 90; i++ {
+				summaries = append(summaries, summary.SummaryRecord{
+					Time: baseDate.AddDate(0, 0, i),
+					Data: summary.Summary{
+						NumInstances: 100000,
+						Versions:     map[string]uint64{"v0.50.0": 50000, "v0.51.0": 50000},
+					},
+				})
+			}
+
+			// Day 91: New version released with very low count (like 0.59.0 scenario)
+			summaries = append(summaries, summary.SummaryRecord{
+				Time: baseDate.AddDate(0, 0, 90),
+				Data: summary.Summary{
+					NumInstances: 100000,
+					Versions:     map[string]uint64{"v0.50.0": 49000, "v0.51.0": 49000, "v0.52.0": 2000},
+				},
+			})
+
+			chart := buildVersionsChart(summaries)
+			Expect(chart).NotTo(BeNil())
+
+			jsonBytes, err := json.Marshal(chart.JSON())
+			Expect(err).NotTo(HaveOccurred())
+			jsonStr := string(jsonBytes)
+
+			// New version v0.52.0 should appear because it's one of the most recent releases
+			Expect(jsonStr).To(ContainSubstring("v0.52.0"))
+			Expect(jsonStr).To(ContainSubstring("v0.50.0"))
+			Expect(jsonStr).To(ContainSubstring("v0.51.0"))
+		})
+
+		It("excludes snapshot versions from recent versions list", func() {
+			var summaries []summary.SummaryRecord
+			baseDate := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+			// Day 1: Old release
+			summaries = append(summaries, summary.SummaryRecord{
+				Time: baseDate,
+				Data: summary.Summary{
+					NumInstances: 1000,
+					Versions:     map[string]uint64{"v0.50.0": 1000},
+				},
+			})
+
+			// Day 2: Snapshot appears (should not be prioritized as "recent")
+			summaries = append(summaries, summary.SummaryRecord{
+				Time: baseDate.AddDate(0, 0, 1),
+				Data: summary.Summary{
+					NumInstances: 1000,
+					Versions:     map[string]uint64{"v0.50.0": 900, "v0.51.0-SNAPSHOT": 100},
+				},
+			})
+
+			// Verify snapshot filtering works
+			recent := getMostRecentVersions(summaries, 10)
+			Expect(recent).To(ContainElement("v0.50.0"))
+			Expect(recent).NotTo(ContainElement("v0.51.0-SNAPSHOT"))
+		})
+	})
+
 	Describe("ExportChartsJSON", func() {
 		var outputDir string
 

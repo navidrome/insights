@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/go-echarts/go-echarts/v2/charts"
@@ -205,11 +204,8 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 		}
 	}
 
-	// Find the most recent versions (by first appearance date, newest first)
-	recentVersions := getMostRecentVersions(summaries, consts.RecentVersionsCount)
-
-	// Build top versions list: reserve slots for recent versions, fill rest by count
-	topVersionsList := buildTopVersionsList(versionTotals, recentVersions, consts.TopVersionsCount)
+	// Get top N versions by total count in the rolling window
+	topVersionsList := getTopKeys(versionTotals, consts.TopVersionsCount)
 
 	// Sort versions by last day's count (highest to lowest)
 	lastSummary := summaries[len(summaries)-1]
@@ -836,93 +832,6 @@ func getTopKeys(m map[string]uint64, n int) []string {
 	for i := 0; i < n; i++ {
 		result[i] = pairs[i].Key
 	}
-	return result
-}
-
-// getMostRecentVersions finds the N most recently appeared versions.
-// It identifies versions by their first appearance date (newest first),
-// filtering to only include release versions (not snapshots/dev builds).
-func getMostRecentVersions(summaries []summary.SummaryRecord, n int) []string {
-	// Track first appearance of each version (iterate oldest to newest)
-	firstAppearance := make(map[string]time.Time)
-	for _, s := range summaries {
-		for version := range s.Data.Versions {
-			// Skip snapshots, dev builds, and other non-release versions
-			if !isReleaseVersion(version) {
-				continue
-			}
-			if _, exists := firstAppearance[version]; !exists {
-				firstAppearance[version] = s.Time
-			}
-		}
-	}
-
-	// Sort versions by first appearance (newest first)
-	type versionDate struct {
-		version string
-		date    time.Time
-	}
-	var versions []versionDate
-	for v, d := range firstAppearance {
-		versions = append(versions, versionDate{v, d})
-	}
-	slices.SortFunc(versions, func(a, b versionDate) int {
-		return b.date.Compare(a.date) // Descending (newest first)
-	})
-
-	// Return top N
-	if n > len(versions) {
-		n = len(versions)
-	}
-	result := make([]string, n)
-	for i := 0; i < n; i++ {
-		result[i] = versions[i].version
-	}
-	return result
-}
-
-// isReleaseVersion returns true if the version string represents a release version
-// (not a snapshot, dev build, or other non-release version)
-func isReleaseVersion(version string) bool {
-	lower := strings.ToLower(version)
-	// Exclude snapshots, dev builds, and other non-release versions
-	if strings.Contains(lower, "snapshot") ||
-		strings.Contains(lower, "dev") ||
-		strings.Contains(lower, "master") ||
-		strings.Contains(lower, "server-") ||
-		strings.Contains(lower, "pr-") {
-		return false
-	}
-	return true
-}
-
-// buildTopVersionsList creates the final list of versions to display.
-// It reserves slots for recent versions, then fills remaining slots by total count.
-func buildTopVersionsList(versionTotals map[string]uint64, recentVersions []string, totalSlots int) []string {
-	// Start with recent versions (they get priority)
-	recentSet := make(map[string]bool)
-	var result []string
-	for _, v := range recentVersions {
-		if _, exists := versionTotals[v]; exists {
-			result = append(result, v)
-			recentSet[v] = true
-		}
-	}
-
-	// Fill remaining slots with top versions by count (excluding already added)
-	remainingSlots := totalSlots - len(result)
-	if remainingSlots > 0 {
-		topByCount := getTopKeys(versionTotals, totalSlots+len(recentVersions))
-		for _, v := range topByCount {
-			if len(result) >= totalSlots {
-				break
-			}
-			if !recentSet[v] {
-				result = append(result, v)
-			}
-		}
-	}
-
 	return result
 }
 

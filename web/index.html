@@ -64,7 +64,8 @@
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
           }
-          const chartsData = await response.json();
+          const data = await response.json();
+          const chartsData = data.charts || data; // Support both new and old format
 
           container.innerHTML = "";
 

@@ -881,8 +881,21 @@ func ExportChartsJSON(outputDir string) error {
 		{"id": "albumsArtists", "options": albumsArtistsChart.JSON()},
 	}
 
+	// Get the most recent total instances count
+	totalInstances := int64(0)
+	if len(summaries) > 0 {
+		totalInstances = summaries[len(summaries)-1].Data.NumInstances
+	}
+
+	// Wrap charts in an object with metadata
+	output := map[string]interface{}{
+		"totalInstances": totalInstances,
+		"lastUpdated":    time.Now().UTC().Format(time.RFC3339),
+		"charts":         chartsData,
+	}
+
 	// Marshal to JSON
-	jsonData, err := json.MarshalIndent(chartsData, "", "  ")
+	jsonData, err := json.MarshalIndent(output, "", "  ")
 	if err != nil {
 		return err
 	}

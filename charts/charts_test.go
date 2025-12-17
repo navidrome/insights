@@ -657,18 +657,25 @@ var _ = Describe("Charts", func() {
 			data, err := os.ReadFile(jsonPath) //#nosec G304 -- test file path
 			Expect(err).NotTo(HaveOccurred())
 
-			// Verify JSON structure (array of charts)
-			var chartsData []map[string]interface{}
-			err = json.Unmarshal(data, &chartsData)
+			// Verify JSON structure (object with metadata + charts array)
+			var output map[string]interface{}
+			err = json.Unmarshal(data, &output)
 			Expect(err).NotTo(HaveOccurred())
+			
+			// Verify metadata fields
+			Expect(output["totalInstances"]).To(BeEquivalentTo(100))
+			Expect(output["lastUpdated"]).NotTo(BeNil())
+			
+			// Verify charts array
+			chartsData := output["charts"].([]interface{})
 			Expect(chartsData).To(HaveLen(6))
-			Expect(chartsData[0]["id"]).To(Equal("versions"))
-			Expect(chartsData[1]["id"]).To(Equal("os"))
-			Expect(chartsData[2]["id"]).To(Equal("players"))
-			Expect(chartsData[3]["id"]).To(Equal("playerTypes"))
-			// Expect(chartsData[4]["id"]).To(Equal("playersPerInstallation"))
-			Expect(chartsData[4]["id"]).To(Equal("tracks"))
-			Expect(chartsData[5]["id"]).To(Equal("albumsArtists"))
+			Expect(chartsData[0].(map[string]interface{})["id"]).To(Equal("versions"))
+			Expect(chartsData[1].(map[string]interface{})["id"]).To(Equal("os"))
+			Expect(chartsData[2].(map[string]interface{})["id"]).To(Equal("players"))
+			Expect(chartsData[3].(map[string]interface{})["id"]).To(Equal("playerTypes"))
+			// Expect(chartsData[4].(map[string]interface{})["id"]).To(Equal("playersPerInstallation"))
+			Expect(chartsData[4].(map[string]interface{})["id"]).To(Equal("tracks"))
+			Expect(chartsData[5].(map[string]interface{})["id"]).To(Equal("albumsArtists"))
 		})
 	})
 })

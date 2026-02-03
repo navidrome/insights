@@ -127,6 +127,69 @@ var _ = Describe("Summary", func() {
 		})
 	})
 
+	Describe("mapFileSuffixes", func() {
+		It("should accumulate file suffix counts from a single instance", func() {
+			suffixes := make(map[string]uint64)
+			data := insights.Data{Library: insightsLibrary{FileSuffixes: map[string]int64{"mp3": 100, "flac": 50}}}
+			mapFileSuffixes(data, suffixes)
+			Expect(suffixes).To(Equal(map[string]uint64{"mp3": 100, "flac": 50}))
+		})
+
+		It("should accumulate file suffix counts across multiple instances", func() {
+			suffixes := make(map[string]uint64)
+			data1 := insights.Data{Library: insightsLibrary{FileSuffixes: map[string]int64{"mp3": 100, "flac": 50}}}
+			data2 := insights.Data{Library: insightsLibrary{FileSuffixes: map[string]int64{"mp3": 200, "ogg": 30}}}
+			mapFileSuffixes(data1, suffixes)
+			mapFileSuffixes(data2, suffixes)
+			Expect(suffixes).To(Equal(map[string]uint64{"mp3": 300, "flac": 50, "ogg": 30}))
+		})
+
+		It("should handle empty file suffixes", func() {
+			suffixes := make(map[string]uint64)
+			data := insights.Data{Library: insightsLibrary{}}
+			mapFileSuffixes(data, suffixes)
+			Expect(suffixes).To(BeEmpty())
+		})
+	})
+
+	Describe("mapPlugins", func() {
+		It("should count instances per plugin name and version", func() {
+			plugins := make(map[string]uint64)
+			versions := make(map[string]uint64)
+			data := insights.Data{Plugins: map[string]insights.PluginInfo{
+				"p1": {Name: "bonob", Version: "1.2.3"},
+				"p2": {Name: "listenbrainz", Version: "0.5.0"},
+			}}
+			mapPlugins(data, plugins, versions)
+			Expect(plugins).To(Equal(map[string]uint64{"bonob": 1, "listenbrainz": 1}))
+			Expect(versions).To(Equal(map[string]uint64{"bonob/1.2.3": 1, "listenbrainz/0.5.0": 1}))
+		})
+
+		It("should accumulate across multiple instances", func() {
+			plugins := make(map[string]uint64)
+			versions := make(map[string]uint64)
+			data1 := insights.Data{Plugins: map[string]insights.PluginInfo{
+				"p1": {Name: "bonob", Version: "1.2.3"},
+			}}
+			data2 := insights.Data{Plugins: map[string]insights.PluginInfo{
+				"p1": {Name: "bonob", Version: "1.3.0"},
+			}}
+			mapPlugins(data1, plugins, versions)
+			mapPlugins(data2, plugins, versions)
+			Expect(plugins).To(Equal(map[string]uint64{"bonob": 2}))
+			Expect(versions).To(Equal(map[string]uint64{"bonob/1.2.3": 1, "bonob/1.3.0": 1}))
+		})
+
+		It("should handle no plugins", func() {
+			plugins := make(map[string]uint64)
+			versions := make(map[string]uint64)
+			data := insights.Data{}
+			mapPlugins(data, plugins, versions)
+			Expect(plugins).To(BeEmpty())
+			Expect(versions).To(BeEmpty())
+		})
+	})
+
 	DescribeTable("mapPlayerTypes",
 		func(data insights.Data, expected map[string]uint64) {
 			players := make(map[string]uint64)

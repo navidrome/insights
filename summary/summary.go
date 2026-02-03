@@ -39,6 +39,9 @@ type Summary struct {
 	Artists         map[string]uint64 `json:"artists,omitempty"`
 	MusicFS         map[string]uint64 `json:"musicFS,omitempty"`
 	DataFS          map[string]uint64 `json:"dataFS,omitempty"`
+	FileSuffixes    map[string]uint64 `json:"fileSuffixes,omitempty"`
+	Plugins         map[string]uint64 `json:"plugins,omitempty"`
+	PluginVersions  map[string]uint64 `json:"pluginVersions,omitempty"`
 	TrackStats      *Stats            `json:"trackStats,omitempty"`
 	AlbumStats      *Stats            `json:"albumStats,omitempty"`
 	ArtistStats     *Stats            `json:"artistStats,omitempty"`
@@ -56,17 +59,20 @@ func SummarizeData(dbConn *sql.DB, date time.Time) error {
 		return err
 	}
 	summary := Summary{
-		Versions:    make(map[string]uint64),
-		OS:          make(map[string]uint64),
-		Distros:     make(map[string]uint64),
-		PlayerTypes: make(map[string]uint64),
-		Players:     make(map[string]uint64),
-		Users:       make(map[string]uint64),
-		Tracks:      make(map[string]uint64),
-		Albums:      make(map[string]uint64),
-		Artists:     make(map[string]uint64),
-		MusicFS:     make(map[string]uint64),
-		DataFS:      make(map[string]uint64),
+		Versions:       make(map[string]uint64),
+		OS:             make(map[string]uint64),
+		Distros:        make(map[string]uint64),
+		PlayerTypes:    make(map[string]uint64),
+		Players:        make(map[string]uint64),
+		Users:          make(map[string]uint64),
+		Tracks:         make(map[string]uint64),
+		Albums:         make(map[string]uint64),
+		Artists:        make(map[string]uint64),
+		MusicFS:        make(map[string]uint64),
+		DataFS:         make(map[string]uint64),
+		FileSuffixes:   make(map[string]uint64),
+		Plugins:        make(map[string]uint64),
+		PluginVersions: make(map[string]uint64),
 	}
 
 	// Collect values for statistics calculation
@@ -88,6 +94,8 @@ func SummarizeData(dbConn *sql.DB, date time.Time) error {
 		summary.DataFS[mapFS(data.FS.Data)]++
 		totalPlayers := mapPlayerTypes(data, summary.PlayerTypes)
 		summary.Players[fmt.Sprintf("%d", totalPlayers)]++
+		mapFileSuffixes(data, summary.FileSuffixes)
+		mapPlugins(data, summary.Plugins, summary.PluginVersions)
 
 		// Bin tracks, albums, and artists
 		mapToBins(data.Library.Tracks, TrackBins, summary.Tracks)
@@ -261,6 +269,19 @@ func mapPlayerTypes(data insights.Data, players map[string]uint64) int64 {
 		players[k] += v
 	}
 	return total
+}
+
+func mapFileSuffixes(data insights.Data, suffixes map[string]uint64) {
+	for suffix, count := range data.Library.FileSuffixes {
+		suffixes[suffix] += uint64(count)
+	}
+}
+
+func mapPlugins(data insights.Data, plugins map[string]uint64, versions map[string]uint64) {
+	for _, plugin := range data.Plugins {
+		plugins[plugin.Name]++
+		versions[plugin.Name+"/"+plugin.Version]++
+	}
 }
 
 var fsMappings = map[string]string{

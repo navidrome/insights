@@ -18,10 +18,7 @@ func OpenDB(fileName string) (*sql.DB, error) {
 	params := url.Values{
 		"_journal_mode": []string{"WAL"},
 		"_synchronous":  []string{"NORMAL"},
-		"cache_size":    []string{"1000000000"},
-		"cache":         []string{"shared"},
 		"_busy_timeout": []string{"5000"},
-		"_txlock":       []string{"immediate"},
 	}
 	dataSourceName := fmt.Sprintf("file:%s?%s", fileName, params.Encode())
 	db, err := sql.Open("sqlite3", dataSourceName)
@@ -44,7 +41,7 @@ CREATE INDEX IF NOT EXISTS insights_id_time ON insights(id, time);
 		return nil, err
 	}
 
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(3)
 	return db, nil
 }
 

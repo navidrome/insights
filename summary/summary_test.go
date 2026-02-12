@@ -214,7 +214,90 @@ var _ = Describe("Summary", func() {
 			map[string]uint64{"Feishin": 1, "NavidromeUI": 2, "play:Sub": 3, "audrey": 4, "bonob": 6, "Airsonic Refix": 7}),
 		Entry("AudioMuse-AI player", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"AudioMuse-AI/v0.8.9": 5}}}, map[string]uint64{"AudioMuse-AI": 5}),
 	)
+
+	Describe("mapConfigFlags", func() {
+		It("should count true boolean fields using JSON tag names", func() {
+			configFlags := make(map[string]uint64)
+			data := insights.Data{Config: insightsConfig{
+				ScannerEnabled: true,
+				EnableLastFM:   true,
+				TLSConfigured:  false,
+			}}
+			mapConfigFlags(data, configFlags)
+			Expect(configFlags["scannerEnabled"]).To(Equal(uint64(1)))
+			Expect(configFlags["enableLastFM"]).To(Equal(uint64(1)))
+			Expect(configFlags).NotTo(HaveKey("tlsConfigured"))
+		})
+
+		It("should accumulate counts across multiple instances", func() {
+			configFlags := make(map[string]uint64)
+			data1 := insights.Data{Config: insightsConfig{ScannerEnabled: true, EnableLastFM: true}}
+			data2 := insights.Data{Config: insightsConfig{ScannerEnabled: true, EnableLastFM: false}}
+			mapConfigFlags(data1, configFlags)
+			mapConfigFlags(data2, configFlags)
+			Expect(configFlags["scannerEnabled"]).To(Equal(uint64(2)))
+			Expect(configFlags["enableLastFM"]).To(Equal(uint64(1)))
+		})
+
+		It("should skip non-boolean fields", func() {
+			configFlags := make(map[string]uint64)
+			data := insights.Data{Config: insightsConfig{
+				ScannerExtractor: "taglib",
+				LogLevel:         "info",
+				ScannerEnabled:   true,
+			}}
+			mapConfigFlags(data, configFlags)
+			Expect(configFlags).NotTo(HaveKey("scannerExtractor"))
+			Expect(configFlags).NotTo(HaveKey("logLevel"))
+			Expect(configFlags["scannerEnabled"]).To(Equal(uint64(1)))
+		})
+
+		It("should handle all-false config", func() {
+			configFlags := make(map[string]uint64)
+			data := insights.Data{Config: insightsConfig{}}
+			mapConfigFlags(data, configFlags)
+			Expect(configFlags).To(BeEmpty())
+		})
+	})
 })
+
+type insightsConfig struct {
+	LogLevel                string `json:"logLevel,omitempty"`
+	LogFileConfigured       bool   `json:"logFileConfigured,omitempty"`
+	TLSConfigured           bool   `json:"tlsConfigured,omitempty"`
+	ScannerEnabled          bool   `json:"scannerEnabled,omitempty"`
+	ScannerExtractor        string `json:"scannerExtractor,omitempty"`
+	ScanSchedule            string `json:"scanSchedule,omitempty"`
+	ScanWatcherWait         uint64 `json:"scanWatcherWait,omitempty"`
+	ScanOnStartup           bool   `json:"scanOnStartup,omitempty"`
+	TranscodingCacheSize    string `json:"transcodingCacheSize,omitempty"`
+	ImageCacheSize          string `json:"imageCacheSize,omitempty"`
+	EnableArtworkPrecache   bool   `json:"enableArtworkPrecache,omitempty"`
+	EnableDownloads         bool   `json:"enableDownloads,omitempty"`
+	EnableSharing           bool   `json:"enableSharing,omitempty"`
+	EnableStarRating        bool   `json:"enableStarRating,omitempty"`
+	EnableLastFM            bool   `json:"enableLastFM,omitempty"`
+	EnableListenBrainz      bool   `json:"enableListenBrainz,omitempty"`
+	EnableDeezer            bool   `json:"enableDeezer,omitempty"`
+	EnableMediaFileCoverArt bool   `json:"enableMediaFileCoverArt,omitempty"`
+	EnableSpotify           bool   `json:"enableSpotify,omitempty"`
+	EnableJukebox           bool   `json:"enableJukebox,omitempty"`
+	EnablePrometheus        bool   `json:"enablePrometheus,omitempty"`
+	EnableCoverAnimation    bool   `json:"enableCoverAnimation,omitempty"`
+	EnableNowPlaying        bool   `json:"enableNowPlaying,omitempty"`
+	SessionTimeout          uint64 `json:"sessionTimeout,omitempty"`
+	SearchFullString        bool   `json:"searchFullString,omitempty"`
+	RecentlyAddedByModTime  bool   `json:"recentlyAddedByModTime,omitempty"`
+	PreferSortTags          bool   `json:"preferSortTags,omitempty"`
+	BackupSchedule          string `json:"backupSchedule,omitempty"`
+	BackupCount             int    `json:"backupCount,omitempty"`
+	DevActivityPanel        bool   `json:"devActivityPanel,omitempty"`
+	DefaultBackgroundURLSet bool   `json:"defaultBackgroundURL,omitempty"`
+	HasSmartPlaylists       bool   `json:"hasSmartPlaylists,omitempty"`
+	ReverseProxyConfigured  bool   `json:"reverseProxyConfigured,omitempty"`
+	HasCustomPID            bool   `json:"hasCustomPID,omitempty"`
+	HasCustomTags           bool   `json:"hasCustomTags,omitempty"`
+}
 
 type insightsOS struct {
 	Type          string `json:"type"`

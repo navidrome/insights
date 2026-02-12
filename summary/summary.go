@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -26,30 +27,32 @@ type Stats struct {
 }
 
 type Summary struct {
-	NumInstances    int64             `json:"numInstances,omitempty"`
-	NumActiveUsers  int64             `json:"numActiveUsers,omitempty"`
-	Versions        map[string]uint64 `json:"versions,omitempty"`
-	OS              map[string]uint64 `json:"os,omitempty"`
-	Distros         map[string]uint64 `json:"distros,omitempty"`
-	PlayerTypes     map[string]uint64 `json:"playerTypes,omitempty"`
-	Players         map[string]uint64 `json:"players,omitempty"`
-	Users           map[string]uint64 `json:"users,omitempty"`
-	Tracks          map[string]uint64 `json:"tracks,omitempty"`
-	Albums          map[string]uint64 `json:"albums,omitempty"`
-	Artists         map[string]uint64 `json:"artists,omitempty"`
-	MusicFS         map[string]uint64 `json:"musicFS,omitempty"`
-	DataFS          map[string]uint64 `json:"dataFS,omitempty"`
-	FileSuffixes    map[string]uint64 `json:"fileSuffixes,omitempty"`
-	Plugins         map[string]uint64 `json:"plugins,omitempty"`
-	PluginVersions  map[string]uint64 `json:"pluginVersions,omitempty"`
-	TrackStats      *Stats            `json:"trackStats,omitempty"`
-	AlbumStats      *Stats            `json:"albumStats,omitempty"`
-	ArtistStats     *Stats            `json:"artistStats,omitempty"`
-	PlaylistStats   *Stats            `json:"playlistStats,omitempty"`
-	ShareStats      *Stats            `json:"shareStats,omitempty"`
-	RadioStats      *Stats            `json:"radioStats,omitempty"`
-	LibraryStats    *Stats            `json:"libraryStats,omitempty"`
-	ActiveUserStats *Stats            `json:"activeUserStats,omitempty"`
+	NumInstances     int64             `json:"numInstances,omitempty"`
+	NumActiveUsers   int64             `json:"numActiveUsers,omitempty"`
+	Versions         map[string]uint64 `json:"versions,omitempty"`
+	OS               map[string]uint64 `json:"os,omitempty"`
+	Distros          map[string]uint64 `json:"distros,omitempty"`
+	PlayerTypes      map[string]uint64 `json:"playerTypes,omitempty"`
+	Players          map[string]uint64 `json:"players,omitempty"`
+	Users            map[string]uint64 `json:"users,omitempty"`
+	Tracks           map[string]uint64 `json:"tracks,omitempty"`
+	Albums           map[string]uint64 `json:"albums,omitempty"`
+	Artists          map[string]uint64 `json:"artists,omitempty"`
+	MusicFS          map[string]uint64 `json:"musicFS,omitempty"`
+	DataFS           map[string]uint64 `json:"dataFS,omitempty"`
+	FileSuffixes     map[string]uint64 `json:"fileSuffixes,omitempty"`
+	Plugins          map[string]uint64 `json:"plugins,omitempty"`
+	PluginVersions   map[string]uint64 `json:"pluginVersions,omitempty"`
+	ConfigFlags      map[string]uint64 `json:"configFlags,omitempty"`
+	ScannerExtractor map[string]uint64 `json:"scannerExtractor,omitempty"`
+	TrackStats       *Stats            `json:"trackStats,omitempty"`
+	AlbumStats       *Stats            `json:"albumStats,omitempty"`
+	ArtistStats      *Stats            `json:"artistStats,omitempty"`
+	PlaylistStats    *Stats            `json:"playlistStats,omitempty"`
+	ShareStats       *Stats            `json:"shareStats,omitempty"`
+	RadioStats       *Stats            `json:"radioStats,omitempty"`
+	LibraryStats     *Stats            `json:"libraryStats,omitempty"`
+	ActiveUserStats  *Stats            `json:"activeUserStats,omitempty"`
 }
 
 func SummarizeData(dbConn *sql.DB, date time.Time) error {
@@ -59,20 +62,22 @@ func SummarizeData(dbConn *sql.DB, date time.Time) error {
 		return err
 	}
 	summary := Summary{
-		Versions:       make(map[string]uint64),
-		OS:             make(map[string]uint64),
-		Distros:        make(map[string]uint64),
-		PlayerTypes:    make(map[string]uint64),
-		Players:        make(map[string]uint64),
-		Users:          make(map[string]uint64),
-		Tracks:         make(map[string]uint64),
-		Albums:         make(map[string]uint64),
-		Artists:        make(map[string]uint64),
-		MusicFS:        make(map[string]uint64),
-		DataFS:         make(map[string]uint64),
-		FileSuffixes:   make(map[string]uint64),
-		Plugins:        make(map[string]uint64),
-		PluginVersions: make(map[string]uint64),
+		Versions:         make(map[string]uint64),
+		OS:               make(map[string]uint64),
+		Distros:          make(map[string]uint64),
+		PlayerTypes:      make(map[string]uint64),
+		Players:          make(map[string]uint64),
+		Users:            make(map[string]uint64),
+		Tracks:           make(map[string]uint64),
+		Albums:           make(map[string]uint64),
+		Artists:          make(map[string]uint64),
+		MusicFS:          make(map[string]uint64),
+		DataFS:           make(map[string]uint64),
+		FileSuffixes:     make(map[string]uint64),
+		Plugins:          make(map[string]uint64),
+		PluginVersions:   make(map[string]uint64),
+		ConfigFlags:      make(map[string]uint64),
+		ScannerExtractor: make(map[string]uint64),
 	}
 
 	// Collect values for statistics calculation
@@ -96,6 +101,10 @@ func SummarizeData(dbConn *sql.DB, date time.Time) error {
 		summary.Players[fmt.Sprintf("%d", totalPlayers)]++
 		mapFileSuffixes(data, summary.FileSuffixes)
 		mapPlugins(data, summary.Plugins, summary.PluginVersions)
+		mapConfigFlags(data, summary.ConfigFlags)
+		if data.Config.ScannerExtractor != "" {
+			summary.ScannerExtractor[data.Config.ScannerExtractor]++
+		}
 
 		// Bin tracks, albums, and artists
 		mapToBins(data.Library.Tracks, TrackBins, summary.Tracks)
@@ -247,7 +256,7 @@ var playersTypes = map[*regexp.Regexp]string{
 	regexp.MustCompile("(?i)(hiby|_hiby_)"):   "HiBy",
 	regexp.MustCompile("microSub"):            "AVSub",
 	regexp.MustCompile("Stream Music"):        "Musiver",
-	regexp.MustCompile(`(?i)audiomuse`): "AudioMuse-AI",
+	regexp.MustCompile(`(?i)audiomuse`):       "AudioMuse-AI",
 }
 
 func mapPlayerTypes(data insights.Data, players map[string]uint64) int64 {
@@ -282,6 +291,26 @@ func mapPlugins(data insights.Data, plugins map[string]uint64, versions map[stri
 	for _, plugin := range data.Plugins {
 		plugins[plugin.Name]++
 		versions[plugin.Name+"/"+plugin.Version]++
+	}
+}
+
+func mapConfigFlags(data insights.Data, configFlags map[string]uint64) {
+	v := reflect.ValueOf(data.Config)
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if field.Type.Kind() != reflect.Bool {
+			continue
+		}
+		if v.Field(i).Bool() {
+			jsonTag := field.Tag.Get("json")
+			if idx := strings.Index(jsonTag, ","); idx != -1 {
+				jsonTag = jsonTag[:idx]
+			}
+			if jsonTag != "" && jsonTag != "-" {
+				configFlags[jsonTag]++
+			}
+		}
 	}
 }
 

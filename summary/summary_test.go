@@ -212,6 +212,7 @@ var _ = Describe("Summary", func() {
 		Entry("Airsonic Refix player (HTTPS)", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"https://airsonic.netlify.app": 7}}}, map[string]uint64{"Airsonic Refix": 7}),
 		Entry("Multiple players", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"Feishin": 1, "NavidromeUI_1.0": 2, "playSub_1.0": 3, "eu.callcc.audrey": 4, "DSubCC": 5, "bonob": 6, "bonob+ogg": 4, "http://airsonic.netlify.app": 7}}},
 			map[string]uint64{"Feishin": 1, "NavidromeUI": 2, "play:Sub": 3, "audrey": 4, "bonob": 6, "Airsonic Refix": 7}),
+		Entry("AudioMuse-AI player", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"AudioMuse-AI/v0.8.9": 5}}}, map[string]uint64{"AudioMuse-AI": 5}),
 	)
 })
 

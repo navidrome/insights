@@ -12,10 +12,10 @@ func main() {
 	if dataFolder == "" {
 		dataFolder = "."
 	}
-	
+
 	chartDataDir := dataFolder + "/web/chartdata"
-	
-	log.Printf("Generating charts.json in %s", chartDataDir)
+
+	log.Printf("Generating charts.json in %s", chartDataDir) //#nosec G706 -- chartDataDir is from controlled env var
 	if err := charts.ExportChartsJSON(chartDataDir); err != nil {
 		log.Fatalf("Error exporting charts JSON: %v", err)
 	}

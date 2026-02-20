@@ -56,7 +56,7 @@ func GetSummaries() ([]SummaryRecord, error) {
 
 	var summaries []SummaryRecord
 
-	err := filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error { //#nosec G703 -- baseDir is from controlled env var and constant
 		if err != nil {
 			// Skip inaccessible directories/files
 			if os.IsNotExist(err) {

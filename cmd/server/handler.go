@@ -25,7 +25,7 @@ func handler(dbConn *sql.DB) http.HandlerFunc {
 			if errors.As(err, &mr) {
 				http.Error(w, mr.msg, mr.status)
 			} else {
-				log.Printf("error decoding payload: %s", err.Error())
+				log.Printf("error decoding payload: %s", err.Error()) //#nosec G706 -- error message is safe
 				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			}
 			return

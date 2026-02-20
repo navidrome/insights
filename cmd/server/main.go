@@ -44,7 +44,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("Connected to database at %s", filepath.Join(dataFolder, "insights.db"))
+	log.Printf("Connected to database at %s", filepath.Join(dataFolder, "insights.db")) //#nosec G706 -- dataFolder is from controlled env var
 
 	if err := startTasks(ctx, dbConn); err != nil {
 		log.Fatal(err)
@@ -72,7 +72,7 @@ func main() {
 		port = consts.DefaultPort
 	}
 
-	log.Print("Starting Insights server on :" + port)
+	log.Print("Starting Insights server on :" + port) //#nosec G706 -- port is from controlled env var or constant
 	server := &http.Server{
 		Addr:              ":" + port,
 		ReadHeaderTimeout: consts.ReadHeaderTimeout,

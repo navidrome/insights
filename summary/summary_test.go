@@ -128,20 +128,20 @@ var _ = Describe("Summary", func() {
 	})
 
 	Describe("mapFileSuffixes", func() {
-		It("should accumulate file suffix counts from a single instance", func() {
+		It("should count one instance per suffix", func() {
 			suffixes := make(map[string]uint64)
 			data := insights.Data{Library: insightsLibrary{FileSuffixes: map[string]int64{"mp3": 100, "flac": 50}}}
 			mapFileSuffixes(data, suffixes)
-			Expect(suffixes).To(Equal(map[string]uint64{"mp3": 100, "flac": 50}))
+			Expect(suffixes).To(Equal(map[string]uint64{"mp3": 1, "flac": 1}))
 		})
 
-		It("should accumulate file suffix counts across multiple instances", func() {
+		It("should count the number of instances that have each suffix", func() {
 			suffixes := make(map[string]uint64)
 			data1 := insights.Data{Library: insightsLibrary{FileSuffixes: map[string]int64{"mp3": 100, "flac": 50}}}
 			data2 := insights.Data{Library: insightsLibrary{FileSuffixes: map[string]int64{"mp3": 200, "ogg": 30}}}
 			mapFileSuffixes(data1, suffixes)
 			mapFileSuffixes(data2, suffixes)
-			Expect(suffixes).To(Equal(map[string]uint64{"mp3": 300, "flac": 50, "ogg": 30}))
+			Expect(suffixes).To(Equal(map[string]uint64{"mp3": 2, "flac": 1, "ogg": 1}))
 		})
 
 		It("should handle empty file suffixes", func() {

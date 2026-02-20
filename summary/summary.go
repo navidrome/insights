@@ -282,8 +282,8 @@ func mapPlayerTypes(data insights.Data, players map[string]uint64) int64 {
 }
 
 func mapFileSuffixes(data insights.Data, suffixes map[string]uint64) {
-	for suffix, count := range data.Library.FileSuffixes {
-		suffixes[suffix] += uint64(count)
+	for suffix := range data.Library.FileSuffixes {
+		suffixes[suffix]++
 	}
 }
 

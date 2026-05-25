@@ -70,14 +70,18 @@ var _ = Describe("Summary", func() {
 	)
 
 	DescribeTable("mapOS",
-		func(expected string, data insights.Data) {
+		func(expected, osType, arch string, containerized bool) {
+			var data insights.Data
+			data.OS.Type = osType
+			data.OS.Arch = arch
+			data.OS.Containerized = containerized
 			Expect(mapOS(data)).To(Equal(expected))
 		},
-		Entry("should map darwin to macOS", "macOS - x86_64", insights.Data{OS: insightsOS{Type: "darwin", Arch: "x86_64"}}),
-		Entry("should map linux to Linux", "Linux - x86_64", insights.Data{OS: insightsOS{Type: "linux", Arch: "x86_64"}}),
-		Entry("should map containerized linux to Linux (containerized)", "Linux (containerized) - x86_64", insights.Data{OS: insightsOS{Type: "linux", Containerized: true, Arch: "x86_64"}}),
-		Entry("should map bsd to BSD", "FreeBSD - x86_64", insights.Data{OS: insightsOS{Type: "freebsd", Arch: "x86_64"}}),
-		Entry("should map unknown OS types", "Unknown - x86_64", insights.Data{OS: insightsOS{Type: "unknown", Arch: "x86_64"}}),
+		Entry("should map darwin to macOS", "macOS - x86_64", "darwin", "x86_64", false),
+		Entry("should map linux to Linux", "Linux - x86_64", "linux", "x86_64", false),
+		Entry("should map containerized linux to Linux (containerized)", "Linux (containerized) - x86_64", "linux", "x86_64", true),
+		Entry("should map bsd to BSD", "FreeBSD - x86_64", "freebsd", "x86_64", false),
+		Entry("should map unknown OS types", "Unknown - x86_64", "unknown", "x86_64", false),
 	)
 	Describe("calcStats", func() {
 		It("should return nil for empty slice", func() {
@@ -130,15 +134,17 @@ var _ = Describe("Summary", func() {
 	Describe("mapFileSuffixes", func() {
 		It("should count one instance per suffix", func() {
 			suffixes := make(map[string]uint64)
-			data := insights.Data{Library: insightsLibrary{FileSuffixes: map[string]int64{"mp3": 100, "flac": 50}}}
+			var data insights.Data
+			data.Library.FileSuffixes = map[string]int64{"mp3": 100, "flac": 50}
 			mapFileSuffixes(data, suffixes)
 			Expect(suffixes).To(Equal(map[string]uint64{"mp3": 1, "flac": 1}))
 		})
 
 		It("should count the number of instances that have each suffix", func() {
 			suffixes := make(map[string]uint64)
-			data1 := insights.Data{Library: insightsLibrary{FileSuffixes: map[string]int64{"mp3": 100, "flac": 50}}}
-			data2 := insights.Data{Library: insightsLibrary{FileSuffixes: map[string]int64{"mp3": 200, "ogg": 30}}}
+			var data1, data2 insights.Data
+			data1.Library.FileSuffixes = map[string]int64{"mp3": 100, "flac": 50}
+			data2.Library.FileSuffixes = map[string]int64{"mp3": 200, "ogg": 30}
 			mapFileSuffixes(data1, suffixes)
 			mapFileSuffixes(data2, suffixes)
 			Expect(suffixes).To(Equal(map[string]uint64{"mp3": 2, "flac": 1, "ogg": 1}))
@@ -146,7 +152,7 @@ var _ = Describe("Summary", func() {
 
 		It("should handle empty file suffixes", func() {
 			suffixes := make(map[string]uint64)
-			data := insights.Data{Library: insightsLibrary{}}
+			var data insights.Data
 			mapFileSuffixes(data, suffixes)
 			Expect(suffixes).To(BeEmpty())
 		})
@@ -191,7 +197,9 @@ var _ = Describe("Summary", func() {
 	})
 
 	DescribeTable("mapPlayerTypes",
-		func(data insights.Data, expected map[string]uint64) {
+		func(activePlayers map[string]int64, expected map[string]uint64) {
+			var data insights.Data
+			data.Library.ActivePlayers = activePlayers
 			players := make(map[string]uint64)
 			c := mapPlayerTypes(data, players)
 			Expect(players).To(Equal(expected))
@@ -202,27 +210,28 @@ var _ = Describe("Summary", func() {
 			}
 			Expect(c).To(Equal(int64(total)))
 		},
-		Entry("Feishin player", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"feishin_": 1, "Feishin": 1}}}, map[string]uint64{"Feishin": 1}),
-		Entry("NavidromeUI player", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"NavidromeUI_1.0": 2}}}, map[string]uint64{"NavidromeUI": 2}),
-		Entry("play:Sub player", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"playSub_iPhone11": 2, "playSub": 1}}}, map[string]uint64{"play:Sub": 2}),
-		Entry("audrey player", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"eu.callcc.audrey": 4}}}, map[string]uint64{"audrey": 4}),
-		Entry("discard DSubCC player", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"DSubCC": 5}}}, map[string]uint64{}),
-		Entry("bonob player", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"bonob": 6, "bonob+ogg": 4}}}, map[string]uint64{"bonob": 6}),
-		Entry("Airsonic Refix player", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"http://airsonic.netlify.app": 7}}}, map[string]uint64{"Airsonic Refix": 7}),
-		Entry("Airsonic Refix player (HTTPS)", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"https://airsonic.netlify.app": 7}}}, map[string]uint64{"Airsonic Refix": 7}),
-		Entry("Multiple players", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"Feishin": 1, "NavidromeUI_1.0": 2, "playSub_1.0": 3, "eu.callcc.audrey": 4, "DSubCC": 5, "bonob": 6, "bonob+ogg": 4, "http://airsonic.netlify.app": 7}}},
+		Entry("Feishin player", map[string]int64{"feishin_": 1, "Feishin": 1}, map[string]uint64{"Feishin": 1}),
+		Entry("NavidromeUI player", map[string]int64{"NavidromeUI_1.0": 2}, map[string]uint64{"NavidromeUI": 2}),
+		Entry("play:Sub player", map[string]int64{"playSub_iPhone11": 2, "playSub": 1}, map[string]uint64{"play:Sub": 2}),
+		Entry("audrey player", map[string]int64{"eu.callcc.audrey": 4}, map[string]uint64{"audrey": 4}),
+		Entry("discard DSubCC player", map[string]int64{"DSubCC": 5}, map[string]uint64{}),
+		Entry("bonob player", map[string]int64{"bonob": 6, "bonob+ogg": 4}, map[string]uint64{"bonob": 6}),
+		Entry("Airsonic Refix player", map[string]int64{"http://airsonic.netlify.app": 7}, map[string]uint64{"Airsonic Refix": 7}),
+		Entry("Airsonic Refix player (HTTPS)", map[string]int64{"https://airsonic.netlify.app": 7}, map[string]uint64{"Airsonic Refix": 7}),
+		Entry("Multiple players",
+			map[string]int64{"Feishin": 1, "NavidromeUI_1.0": 2, "playSub_1.0": 3, "eu.callcc.audrey": 4, "DSubCC": 5, "bonob": 6, "bonob+ogg": 4, "http://airsonic.netlify.app": 7},
 			map[string]uint64{"Feishin": 1, "NavidromeUI": 2, "play:Sub": 3, "audrey": 4, "bonob": 6, "Airsonic Refix": 7}),
-		Entry("AudioMuse-AI player", insights.Data{Library: insightsLibrary{ActivePlayers: map[string]int64{"AudioMuse-AI/v0.8.9": 5}}}, map[string]uint64{"AudioMuse-AI": 5}),
+		Entry("AudioMuse-AI player", map[string]int64{"AudioMuse-AI/v0.8.9": 5}, map[string]uint64{"AudioMuse-AI": 5}),
+		Entry("psysonic player collapses versions", map[string]int64{"psysonic/1.46.0": 3, "psysonic/1.45.0": 2}, map[string]uint64{"psysonic": 3}),
 	)
 
 	Describe("mapConfigFlags", func() {
 		It("should count true boolean fields using JSON tag names", func() {
 			configFlags := make(map[string]uint64)
-			data := insights.Data{Config: insightsConfig{
-				ScannerEnabled: true,
-				EnableLastFM:   true,
-				TLSConfigured:  false,
-			}}
+			var data insights.Data
+			data.Config.ScannerEnabled = true
+			data.Config.EnableLastFM = true
+			data.Config.TLSConfigured = false
 			mapConfigFlags(data, configFlags)
 			Expect(configFlags["scannerEnabled"]).To(Equal(uint64(1)))
 			Expect(configFlags["enableLastFM"]).To(Equal(uint64(1)))
@@ -231,8 +240,11 @@ var _ = Describe("Summary", func() {
 
 		It("should accumulate counts across multiple instances", func() {
 			configFlags := make(map[string]uint64)
-			data1 := insights.Data{Config: insightsConfig{ScannerEnabled: true, EnableLastFM: true}}
-			data2 := insights.Data{Config: insightsConfig{ScannerEnabled: true, EnableLastFM: false}}
+			var data1, data2 insights.Data
+			data1.Config.ScannerEnabled = true
+			data1.Config.EnableLastFM = true
+			data2.Config.ScannerEnabled = true
+			data2.Config.EnableLastFM = false
 			mapConfigFlags(data1, configFlags)
 			mapConfigFlags(data2, configFlags)
 			Expect(configFlags["scannerEnabled"]).To(Equal(uint64(2)))
@@ -241,11 +253,10 @@ var _ = Describe("Summary", func() {
 
 		It("should skip non-boolean fields", func() {
 			configFlags := make(map[string]uint64)
-			data := insights.Data{Config: insightsConfig{
-				ScannerExtractor: "taglib",
-				LogLevel:         "info",
-				ScannerEnabled:   true,
-			}}
+			var data insights.Data
+			data.Config.ScannerExtractor = "taglib"
+			data.Config.LogLevel = "info"
+			data.Config.ScannerEnabled = true
 			mapConfigFlags(data, configFlags)
 			Expect(configFlags).NotTo(HaveKey("scannerExtractor"))
 			Expect(configFlags).NotTo(HaveKey("logLevel"))
@@ -254,70 +265,9 @@ var _ = Describe("Summary", func() {
 
 		It("should handle all-false config", func() {
 			configFlags := make(map[string]uint64)
-			data := insights.Data{Config: insightsConfig{}}
+			var data insights.Data
 			mapConfigFlags(data, configFlags)
 			Expect(configFlags).To(BeEmpty())
 		})
 	})
 })
-
-type insightsConfig struct {
-	LogLevel                string `json:"logLevel,omitempty"`
-	LogFileConfigured       bool   `json:"logFileConfigured,omitempty"`
-	TLSConfigured           bool   `json:"tlsConfigured,omitempty"`
-	ScannerEnabled          bool   `json:"scannerEnabled,omitempty"`
-	ScannerExtractor        string `json:"scannerExtractor,omitempty"`
-	ScanSchedule            string `json:"scanSchedule,omitempty"`
-	ScanWatcherWait         uint64 `json:"scanWatcherWait,omitempty"`
-	ScanOnStartup           bool   `json:"scanOnStartup,omitempty"`
-	TranscodingCacheSize    string `json:"transcodingCacheSize,omitempty"`
-	ImageCacheSize          string `json:"imageCacheSize,omitempty"`
-	EnableArtworkPrecache   bool   `json:"enableArtworkPrecache,omitempty"`
-	EnableDownloads         bool   `json:"enableDownloads,omitempty"`
-	EnableSharing           bool   `json:"enableSharing,omitempty"`
-	EnableStarRating        bool   `json:"enableStarRating,omitempty"`
-	EnableLastFM            bool   `json:"enableLastFM,omitempty"`
-	EnableListenBrainz      bool   `json:"enableListenBrainz,omitempty"`
-	EnableDeezer            bool   `json:"enableDeezer,omitempty"`
-	EnableMediaFileCoverArt bool   `json:"enableMediaFileCoverArt,omitempty"`
-	EnableSpotify           bool   `json:"enableSpotify,omitempty"`
-	EnableJukebox           bool   `json:"enableJukebox,omitempty"`
-	EnablePrometheus        bool   `json:"enablePrometheus,omitempty"`
-	EnableCoverAnimation    bool   `json:"enableCoverAnimation,omitempty"`
-	EnableNowPlaying        bool   `json:"enableNowPlaying,omitempty"`
-	SessionTimeout          uint64 `json:"sessionTimeout,omitempty"`
-	SearchFullString        bool   `json:"searchFullString,omitempty"`
-	RecentlyAddedByModTime  bool   `json:"recentlyAddedByModTime,omitempty"`
-	PreferSortTags          bool   `json:"preferSortTags,omitempty"`
-	BackupSchedule          string `json:"backupSchedule,omitempty"`
-	BackupCount             int    `json:"backupCount,omitempty"`
-	DevActivityPanel        bool   `json:"devActivityPanel,omitempty"`
-	DefaultBackgroundURLSet bool   `json:"defaultBackgroundURL,omitempty"`
-	HasSmartPlaylists       bool   `json:"hasSmartPlaylists,omitempty"`
-	ReverseProxyConfigured  bool   `json:"reverseProxyConfigured,omitempty"`
-	HasCustomPID            bool   `json:"hasCustomPID,omitempty"`
-	HasCustomTags           bool   `json:"hasCustomTags,omitempty"`
-}
-
-type insightsOS struct {
-	Type          string `json:"type"`
-	Distro        string `json:"distro,omitempty"`
-	Version       string `json:"version,omitempty"`
-	Containerized bool   `json:"containerized"`
-	Arch          string `json:"arch"`
-	NumCPU        int    `json:"numCPU"`
-	Package       string `json:"package,omitempty"`
-}
-
-type insightsLibrary struct {
-	Tracks        int64            `json:"tracks"`
-	Albums        int64            `json:"albums"`
-	Artists       int64            `json:"artists"`
-	Playlists     int64            `json:"playlists"`
-	Shares        int64            `json:"shares"`
-	Radios        int64            `json:"radios"`
-	Libraries     int64            `json:"libraries"`
-	ActiveUsers   int64            `json:"activeUsers"`
-	ActivePlayers map[string]int64 `json:"activePlayers,omitempty"`
-	FileSuffixes  map[string]int64 `json:"fileSuffixes,omitempty"`
-}

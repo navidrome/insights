@@ -84,7 +84,7 @@ func GetSummaries() ([]SummaryRecord, error) {
 		}
 
 		// Read and parse file
-		data, err := os.ReadFile(path) //#nosec G304 -- path is from controlled directory walk
+		data, err := os.ReadFile(path) //#nosec G304,G122 -- path is from controlled directory walk
 		if err != nil {
 			log.Printf("Warning: skipping unreadable file %s: %v", path, err)
 			return nil

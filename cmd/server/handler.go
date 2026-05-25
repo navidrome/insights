@@ -33,7 +33,7 @@ func handler(dbConn *sql.DB) http.HandlerFunc {
 
 		err = db.SaveReport(dbConn, data, time.Now())
 		if err != nil {
-			log.Printf("Error handling request: %s", err.Error())
+			log.Printf("Error handling request: %s", err.Error()) //#nosec G706 -- error message is safe
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}

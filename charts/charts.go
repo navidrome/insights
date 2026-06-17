@@ -403,7 +403,7 @@ func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
 		}
 	}
 	if othersCount > 0 {
-		data = append(data, opts.PieData{Name: "Others (less than 0.2%)", Value: othersCount})
+		data = append(data, opts.PieData{Name: "Others", Value: othersCount})
 	}
 
 	// Sort data by value descending

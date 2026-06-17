@@ -50,8 +50,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	go summarize(ctx, dbConn)()
-	go generateCharts(ctx)()
+	go func() {
+		summarize(ctx, dbConn)()
+		generateCharts(ctx)()
+	}()
 
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)

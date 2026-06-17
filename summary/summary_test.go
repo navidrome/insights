@@ -223,6 +223,10 @@ var _ = Describe("Summary", func() {
 			map[string]uint64{"Feishin": 1, "NavidromeUI": 2, "play:Sub": 3, "audrey": 4, "bonob": 6, "Airsonic Refix": 7}),
 		Entry("AudioMuse-AI player", map[string]int64{"AudioMuse-AI/v0.8.9": 5}, map[string]uint64{"AudioMuse-AI": 5}),
 		Entry("psysonic player collapses versions", map[string]int64{"psysonic/1.46.0": 3, "psysonic/1.45.0": 2}, map[string]uint64{"psysonic": 3}),
+		Entry("discard archiver player", map[string]int64{"archiver": 10739}, map[string]uint64{}),
+		Entry("archiver discard is exact-match only",
+			map[string]int64{"archiver": 10739, "ranchmusicarchiver": 3, "ArchiveTune": 1},
+			map[string]uint64{"ranchmusicarchiver": 3, "ArchiveTune": 1}),
 	)
 
 	Describe("mapConfigFlags", func() {

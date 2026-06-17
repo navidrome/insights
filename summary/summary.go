@@ -258,6 +258,7 @@ var playersTypes = map[*regexp.Regexp]string{
 	regexp.MustCompile("Stream Music"):        "Musiver",
 	regexp.MustCompile(`(?i)audiomuse`):       "AudioMuse-AI",
 	regexp.MustCompile(`(?i)^psysonic.*`):     "psysonic",
+	regexp.MustCompile("^archiver$"):          "", // Discard (single instance inflating count via per-request player rows)
 }
 
 func mapPlayerTypes(data insights.Data, players map[string]uint64) int64 {

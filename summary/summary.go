@@ -262,8 +262,14 @@ var playersTypes = map[*regexp.Regexp]string{
 }
 
 func mapPlayerTypes(data insights.Data, players map[string]uint64) int64 {
+	// A few instances churn out player identities (new player row per request),
+	// reporting thousands of players for a single client name and inflating the
+	// charts. Legit servers stay around 1-2 players per active user, churners run
+	// hundreds to thousands, so a generous per-user allowance separates them.
+	limit := max(100, 10*data.Library.ActiveUsers)
 	seen := map[string]uint64{}
 	for p, count := range data.Library.ActivePlayers {
+		count = min(count, limit)
 		for r, t := range playersTypes {
 			if r.MatchString(p) {
 				p = t

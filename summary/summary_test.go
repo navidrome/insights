@@ -251,6 +251,8 @@ var _ = Describe("Summary", func() {
 			map[string]int64{"Symfonium": 250}, int64(0), map[string]uint64{"Symfonium": 100}),
 		Entry("leaves counts under the floor unchanged",
 			map[string]int64{"Symfonium": 90}, int64(0), map[string]uint64{"Symfonium": 90}),
+		Entry("clamps negative counts to zero instead of wrapping to uint64",
+			map[string]int64{"Symfonium": -5}, int64(0), map[string]uint64{"Symfonium": 0}),
 	)
 
 	Describe("mapConfigFlags", func() {

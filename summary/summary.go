@@ -269,7 +269,9 @@ func mapPlayerTypes(data insights.Data, players map[string]uint64) int64 {
 	limit := max(100, 10*data.Library.ActiveUsers)
 	seen := map[string]uint64{}
 	for p, count := range data.Library.ActivePlayers {
-		count = min(count, limit)
+		// Clamp to [0, limit]: negative reported counts would wrap around in
+		// the uint64 conversion below.
+		count = min(max(count, 0), limit)
 		for r, t := range playersTypes {
 			if r.MatchString(p) {
 				p = t

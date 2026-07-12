@@ -229,6 +229,30 @@ var _ = Describe("Summary", func() {
 			map[string]uint64{"ranchmusicarchiver": 3, "ArchiveTune": 1}),
 	)
 
+	DescribeTable("mapPlayerTypes caps identity-churning instances",
+		func(activePlayers map[string]int64, activeUsers int64, expected map[string]uint64) {
+			var data insights.Data
+			data.Library.ActivePlayers = activePlayers
+			data.Library.ActiveUsers = activeUsers
+			players := make(map[string]uint64)
+			mapPlayerTypes(data, players)
+			Expect(players).To(Equal(expected))
+		},
+		Entry("caps a single-user instance reporting thousands of players",
+			map[string]int64{"Symfonium": 10781}, int64(1), map[string]uint64{"Symfonium": 100}),
+		Entry("caps each player type independently",
+			map[string]int64{"Symfonium": 10781, "Feishin": 306, "Chora": 50}, int64(1),
+			map[string]uint64{"Symfonium": 100, "Feishin": 100, "Chora": 50}),
+		Entry("cap scales with active users",
+			map[string]int64{"Symfonium": 10781}, int64(30), map[string]uint64{"Symfonium": 300}),
+		Entry("does not touch large multi-user servers",
+			map[string]int64{"NavidromeUI_1.0": 600}, int64(500), map[string]uint64{"NavidromeUI": 600}),
+		Entry("applies the floor when no active users are reported",
+			map[string]int64{"Symfonium": 250}, int64(0), map[string]uint64{"Symfonium": 100}),
+		Entry("leaves counts under the floor unchanged",
+			map[string]int64{"Symfonium": 90}, int64(0), map[string]uint64{"Symfonium": 90}),
+	)
+
 	Describe("mapConfigFlags", func() {
 		It("should count true boolean fields using JSON tag names", func() {
 			configFlags := make(map[string]uint64)

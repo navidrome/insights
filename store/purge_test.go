@@ -98,6 +98,18 @@ func dayBytes(dir string, date time.Time) uint64 {
 	return total
 }
 
+// abandonedSegment writes a hidden segment of the given size into date's day directory: what an
+// earlier purge leaves behind when it hid a day's segments and then failed to unlink one. No
+// reader can see it, which is why the purge has to sweep it up itself.
+func abandonedSegment(dir string, date time.Time, size int) string {
+	GinkgoHelper()
+	name := purgingPrefix + "reports-" + date.Format(consts.DateFormat) + ".007" + consts.ReportFileExt
+	path := filepath.Join(dayDir(dir, date), name)
+	Expect(os.MkdirAll(filepath.Dir(path), consts.DirPermissions)).To(Succeed())
+	Expect(os.WriteFile(path, []byte(strings.Repeat("x", size)), consts.FilePermissions)).To(Succeed())
+	return path
+}
+
 var _ = Describe("PurgeToFreeSpace", func() {
 	var dir string
 	var today time.Time
@@ -332,6 +344,9 @@ var _ = Describe("PurgeToFreeSpace", func() {
 				"a day that could not be fully deleted must not stay summarizable")
 			Expect(DaySegmentPaths(dir, old)).To(BeEmpty())
 			Expect(out).To(ContainSubstring(old.Format(consts.DateFormat)))
+			// One of its two segments is still on disk, hidden. Counting it as a day purged
+			// would put "Purged 1 report day(s)" in the log for a day that is still there.
+			Expect(out).ToNot(ContainSubstring("Purged 1 report day(s)"))
 		})
 
 		// The days after this one are on the same volume and would fail the same way, and each
@@ -369,15 +384,52 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		It("is deleted by a later purge", func() {
 			old := daysAgo(30)
 			writeDay(dir, old, "a")
-			hidden := filepath.Join(filepath.Dir(DaySegmentPaths(dir, old)[0]),
-				".purging-reports-"+old.Format(consts.DateFormat)+".007.ndjson.gz")
-			Expect(os.WriteFile(hidden, []byte("stale"), consts.FilePermissions)).To(Succeed())
+			hidden := abandonedSegment(dir, old, 5)
 			newFakeVolume(dir, 0).install()
 
 			Expect(PurgeToFreeSpace(dir, unreachableTarget, 7)).To(Succeed())
 
 			_, statErr := os.Stat(hidden)
 			Expect(os.IsNotExist(statErr)).To(BeTrue(), "space no reader can see is space nothing else frees")
+		})
+
+		// The sweep frees space before the day loop runs, so the loop has to look at the volume
+		// again before it deletes anything. Without that it destroys a day of reports to reach
+		// a target the sweep had already reached.
+		It("does not delete a day for space the sweep had already freed", func() {
+			old := daysAgo(30)
+			writeDay(dir, old, "a")
+			hidden := abandonedSegment(dir, old, 4096)
+			target := baseFree + 4096
+			newFakeVolume(dir, baseFree).install()
+
+			Expect(PurgeToFreeSpace(dir, target, 7)).To(Succeed())
+
+			_, statErr := os.Stat(hidden)
+			Expect(os.IsNotExist(statErr)).To(BeTrue(), "the sweep must have run")
+			Expect(HasDay(dir, old)).To(BeTrue(), "the target was met before any day needed to go")
+		})
+
+		// The sweep deletes files no reader can see, and from a reader's point of view the
+		// writer's lock file is exactly that. Unlinking it under a live ingest breaks the
+		// single-writer invariant in silence: the next process to start creates a fresh lock
+		// file, takes it uncontested, and appends to the same day as the process still holding
+		// the old inode — two gzip streams interleaved into one segment.
+		It("never sweeps the writer lock file", func() {
+			old := daysAgo(30)
+			writeDay(dir, old, "a")
+			lock := filepath.Join(dir, consts.ReportsDir, lockFileName)
+			// The lock file has to be reachable by the sweep for this to mean anything, so the
+			// purge is put under pressure and given something to sweep.
+			hidden := abandonedSegment(dir, old, 16)
+			newFakeVolume(dir, 0).install()
+
+			Expect(PurgeToFreeSpace(dir, unreachableTarget, 7)).To(Succeed())
+
+			_, statErr := os.Stat(hidden)
+			Expect(os.IsNotExist(statErr)).To(BeTrue(), "the sweep must have run")
+			_, statErr = os.Stat(lock)
+			Expect(statErr).ToNot(HaveOccurred(), "the sweep must delete report segments, not every dotfile")
 		})
 	})
 

@@ -94,12 +94,29 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 	// the only thing left to do with them, and skipping the retry would leak their space for
 	// good on a store whose retention is driven by free space. A failure here is logged and
 	// not fatal: it is space that is already lost either way.
+	var swept int
 	for _, path := range abandoned {
 		if err := removeFile(path); err != nil { //#nosec G122 -- path comes from a controlled directory walk under DATA_FOLDER
 			log.Printf("Error deleting segment %s abandoned by an earlier purge: %v", path, err) //#nosec G706 -- path comes from a controlled directory walk
 			continue
 		}
+		swept++
 		log.Printf("Deleted segment %s abandoned by an earlier purge", path) //#nosec G706 -- path comes from a controlled directory walk
+	}
+
+	// Re-probe before touching a day. The sweep just freed space, and without this the loop
+	// below deletes a whole day before it looks at the volume again — reports deleted that did
+	// not need to go, which is the one thing this purge exists not to do.
+	if swept > 0 {
+		free, err = freeBytes(dataFolder)
+		if err != nil {
+			return err
+		}
+		if free >= minFreeBytes {
+			// Unlike the check at the top, files went away here, so a day directory may have
+			// been left empty and the prune has something to do.
+			return pruneEmptyDirs(baseDir)
+		}
 	}
 
 	// The oldest day kept regardless of pressure is minRetentionDays days back; the day before
@@ -118,9 +135,12 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 			break
 		}
 		n, err := removeDay(segments[day])
-		if n > 0 {
+		deletedFiles += n
+		// Only a day that went away entirely counts as a day purged. A day that lost some of
+		// its segments and kept the rest is reported by the warning below, by name; counting
+		// it here would put "Purged 1 report day(s)" in the log for a day still on disk.
+		if err == nil {
 			deletedDays++
-			deletedFiles += n
 		}
 		if err != nil {
 			// Loud, and by name: whatever state that day ended in, an operator has to be able
@@ -148,7 +168,9 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 	// this function would otherwise reach an operator whose whole report tree is still on disk
 	// and tell them there are no report days left to delete.
 	if removeErr != nil {
-		if deletedDays > 0 {
+		// Counted in segments as well as days here: the day that failed contributed segments
+		// without contributing a day, and saying so is the whole point of the distinction.
+		if deletedFiles > 0 {
 			log.Printf("Purged %d report day(s), %d segment(s) before the deletion failed",
 				deletedDays, deletedFiles)
 		}
@@ -245,13 +267,23 @@ func reportDays(baseDir string) ([]time.Time, map[time.Time][]string, []string, 
 // corruption of the product output, not just of the raw store. Free-space retention keeps
 // months of days a backfill can be aimed at, so that is not a theoretical window.
 //
-// The two passes give the day one of two honest states instead:
+// For a failure this function returns from, the two passes leave the day in one of two honest
+// states:
 //   - a rename fails: nothing has been unlinked, the names already taken are put back, and the
 //     day is left exactly as it was — whole, visible, correctly summarizable.
 //   - an unlink fails: every segment is already hidden, so the day is gone as far as every
 //     reader is concerned, and the bytes left behind are picked up by a later purge.
 //
 // Either way the error is returned, and the caller stops the purge on it.
+//
+// There is a third state this cannot rule out: a process killed between two renames leaves
+// part of the day hidden and the rest visible, so HasDay reports it and a backfill would
+// summarize it from the survivors — the very failure the two passes are for. Nothing short of
+// a journal closes that window, and it is not new: a kill mid-deletion left the same partial
+// day before. What does happen next is that the sweep in PurgeToFreeSpace unlinks the hidden
+// part on a later run, permanently, so the day ends up smaller than it was and still visible.
+// Both halves of that are worth knowing before trusting a backfill run over a day whose purge
+// was interrupted.
 func removeDay(paths []string) (int, error) {
 	hidden := make([]string, 0, len(paths))
 	for i, path := range paths {

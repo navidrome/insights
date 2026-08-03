@@ -288,6 +288,125 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(out).ToNot(ContainSubstring("minimum retention"))
 	})
 
+	// A day deleted segment by segment leaves, on the first failure, a day that is half on disk
+	// and still reported by HasDay. A later `process -once -days N` backfill then rewrites that
+	// day's summary from the reports that survived and publishes the result — silent corruption
+	// of the charts, not just of the raw store.
+	//
+	// The assertion that matters is the on-disk state: an error alone would be returned by a
+	// purge that left the day exactly as broken.
+	Describe("a segment that cannot be deleted", func() {
+		// failRemoving makes unlinking one segment fail — the way a single bad inode, or a file
+		// something else is holding, does — while its siblings delete normally. It matches on
+		// the segment's file name, not its full path, so the failure lands whether the purge
+		// unlinks the segment under its own name or under the one it hides it behind first.
+		failRemoving := func(segment string) {
+			GinkgoHelper()
+			name := filepath.Base(segment)
+			prev := removeFile
+			removeFile = func(path string) error {
+				if strings.HasSuffix(path, name) {
+					return errors.New("unlink boom")
+				}
+				return prev(path)
+			}
+			DeferCleanup(func() { removeFile = prev })
+		}
+
+		It("leaves no part of that day visible to summarization", func() {
+			old := daysAgo(30)
+			writeDay(dir, old, "a")
+			writeDay(dir, old, "b")
+			segments := DaySegmentPaths(dir, old)
+			Expect(segments).To(HaveLen(2))
+			// The second segment, so the first one is already deleted when the failure lands:
+			// that is the state that used to leave a visible, half-empty day behind.
+			failRemoving(segments[1])
+			newFakeVolume(dir, 0).install()
+
+			var err error
+			out := captureLog(func() { err = PurgeToFreeSpace(dir, unreachableTarget, 7) })
+
+			Expect(err).To(MatchError(ContainSubstring("unlink boom")))
+			Expect(HasDay(dir, old)).To(BeFalse(),
+				"a day that could not be fully deleted must not stay summarizable")
+			Expect(DaySegmentPaths(dir, old)).To(BeEmpty())
+			Expect(out).To(ContainSubstring(old.Format(consts.DateFormat)))
+		})
+
+		// The days after this one are on the same volume and would fail the same way, and each
+		// attempt is another day left in a state an operator has to be told about.
+		It("stops the purge instead of moving on to the next day", func() {
+			writeDay(dir, daysAgo(30), "a")
+			writeDay(dir, daysAgo(20), "b")
+			failRemoving(DaySegmentPaths(dir, daysAgo(30))[0])
+			newFakeVolume(dir, 0).install()
+
+			Expect(PurgeToFreeSpace(dir, unreachableTarget, 7)).ToNot(Succeed())
+
+			Expect(HasDay(dir, daysAgo(20))).To(BeTrue())
+		})
+
+		// The old warning fired on any unmet target and blamed the only two causes it knew
+		// about. On a volume that refuses deletions it told an operator there were no report
+		// days left to delete while the entire tree was still there.
+		It("does not claim there are no report days left", func() {
+			writeDay(dir, daysAgo(30), "a")
+			failRemoving(DaySegmentPaths(dir, daysAgo(30))[0])
+			newFakeVolume(dir, 0).install()
+
+			var err error
+			out := captureLog(func() { err = PurgeToFreeSpace(dir, unreachableTarget, 7) })
+
+			Expect(err).To(HaveOccurred())
+			Expect(out).ToNot(ContainSubstring("no report days left"))
+			Expect(out).To(ContainSubstring("unlink boom"))
+		})
+
+		// Hidden segments are invisible to HasDay and to the day enumeration by design, which
+		// also means nothing else would ever reclaim their space — on a store whose retention
+		// is driven by free space, that is a leak that grows with every failure.
+		It("is deleted by a later purge", func() {
+			old := daysAgo(30)
+			writeDay(dir, old, "a")
+			hidden := filepath.Join(filepath.Dir(DaySegmentPaths(dir, old)[0]),
+				".purging-reports-"+old.Format(consts.DateFormat)+".007.ndjson.gz")
+			Expect(os.WriteFile(hidden, []byte("stale"), consts.FilePermissions)).To(Succeed())
+			newFakeVolume(dir, 0).install()
+
+			Expect(PurgeToFreeSpace(dir, unreachableTarget, 7)).To(Succeed())
+
+			_, statErr := os.Stat(hidden)
+			Expect(os.IsNotExist(statErr)).To(BeTrue(), "space no reader can see is space nothing else frees")
+		})
+	})
+
+	// The other half of the two-pass deletion: when a segment cannot even be hidden, nothing
+	// has been unlinked yet, so the day has to come back whole rather than half-hidden.
+	It("restores a day it started to hide but could not delete", func() {
+		old := daysAgo(30)
+		writeDay(dir, old, "a")
+		writeDay(dir, old, "b")
+		segments := DaySegmentPaths(dir, old)
+		Expect(segments).To(HaveLen(2))
+		// A directory sitting on the name the purge hides the second segment under: renaming a
+		// file onto a directory fails, and by then the first segment is already hidden.
+		blocked := filepath.Join(filepath.Dir(segments[1]), ".purging-"+filepath.Base(segments[1]))
+		Expect(os.Mkdir(blocked, consts.DirPermissions)).To(Succeed())
+		newFakeVolume(dir, 0).install()
+
+		var err error
+		out := captureLog(func() { err = PurgeToFreeSpace(dir, unreachableTarget, 7) })
+
+		Expect(err).To(HaveOccurred())
+		Expect(DaySegmentPaths(dir, old)).To(Equal(segments),
+			"nothing was unlinked, so the day must be left exactly as it was")
+		seq, readErr := ReadDay(dir, old)
+		Expect(readErr).ToNot(HaveOccurred())
+		Expect(collectIDs(seq)).To(ConsistOf("a", "b"))
+		Expect(out).To(ContainSubstring(old.Format(consts.DateFormat)))
+	})
+
 	// An unreadable volume is not a licence to start deleting: without a free-space reading
 	// there is no way to know how much, if anything, needs to go.
 	It("deletes nothing and reports the error when the space probe fails", func() {

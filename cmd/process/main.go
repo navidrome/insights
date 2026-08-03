@@ -5,6 +5,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -20,6 +21,10 @@ func main() {
 	once := flag.Bool("once", false, "Run summarize and chart generation once, then exit")
 	days := flag.Int("days", consts.SummarizeLookbackDays, "Number of past days to summarize")
 	flag.Parse()
+
+	if err := checkDays(*days); err != nil {
+		log.Fatal(err)
+	}
 
 	dataFolder := os.Getenv("DATA_FOLDER")
 
@@ -62,6 +67,16 @@ func main() {
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
+}
+
+// checkDays rejects a lookback that summarizes nothing. Without it, -days 0 or a negative
+// value leaves the every-2h job running as a no-op forever: it still logs "Summarizing data",
+// /healthz stays green, and the summaries silently stop being updated.
+func checkDays(days int) error {
+	if days < 1 {
+		return fmt.Errorf("-days must be at least 1, got %d", days)
+	}
+	return nil
 }
 
 // startTasks schedules the background jobs and starts running them.

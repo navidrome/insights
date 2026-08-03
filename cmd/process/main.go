@@ -73,24 +73,40 @@ func main() {
 // value leaves the every-2h job running as a no-op forever: it still logs "Summarizing data",
 // /healthz stays green, and the summaries silently stop being updated.
 //
-// The upper bound is the same invariant consts asserts at compile time between
-// SummarizeLookbackDays and MinRetentionDays, enforced here for the flag that overrides it.
-// A lookback reaching past the purge floor summarizes days the purge is free to delete under
-// disk pressure, so a day can disappear from the charts between one run and the next with
-// nothing to say why.
+// It deliberately has no upper bound: see checkScheduledDays.
 func checkDays(days int) error {
 	if days < 1 {
 		return fmt.Errorf("-days must be at least 1, got %d", days)
 	}
+	return nil
+}
+
+// checkScheduledDays bounds the lookback against the purge floor. This is the runtime half of
+// the invariant consts asserts at compile time between SummarizeLookbackDays and
+// MinRetentionDays: -days overrides the former, so without this the floor can be outrun without
+// touching a constant.
+//
+// It applies to the scheduled mode only. There the summarize job runs continuously alongside
+// the hourly purge, so a lookback reaching past the floor means the purge can delete a day out
+// from under the window that is still being re-read. A -once run has no such interaction: it
+// reads what is on disk, skips any day the purge already took (summary guards on store.HasDay,
+// and whole days are deleted, so a taken day is skipped rather than rewritten from part of
+// itself) and then exits. Bounding -once as well would cost the backfill outright — retention
+// is driven by free space now, so the store routinely holds months of days that reaching back
+// into is the entire point of the flag.
+func checkScheduledDays(days int) error {
 	if days >= consts.MinRetentionDays {
-		return fmt.Errorf("-days must be below the %d-day purge floor (consts.MinRetentionDays), got %d",
-			consts.MinRetentionDays, days)
+		return fmt.Errorf("scheduled -days must be below the %d-day purge floor (consts.MinRetentionDays), got %d; "+
+			"-once has no such limit, so use it for a wider backfill", consts.MinRetentionDays, days)
 	}
 	return nil
 }
 
 // startTasks schedules the background jobs and starts running them.
 func startTasks(dataFolder string, days int) error {
+	if err := checkScheduledDays(days); err != nil {
+		return err
+	}
 	c, err := newScheduler(dataFolder, days)
 	if err != nil {
 		return err

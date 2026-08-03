@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -19,17 +20,50 @@ func TestCheckDays(t *testing.T) {
 		{days: 0, wantErr: true},
 		{days: 1},
 		{days: consts.SummarizeLookbackDays},
-		// A lookback must stay below the purge floor, or disk pressure can delete a day the
-		// summarize pass is still re-reading. The default satisfies that by construction; the
-		// flag is the way past it, so the boundary is pinned from both sides here.
-		{days: consts.MinRetentionDays - 1},
-		{days: consts.MinRetentionDays, wantErr: true},
-		{days: consts.MinRetentionDays + 1, wantErr: true},
+		// checkDays gates both modes, so it must NOT bound the lookback against the purge
+		// floor: -once is how a backfill reaches back over the months of history that
+		// free-space retention now keeps. Moving that bound in here would break the backfill
+		// while every scheduled-path spec below still passed, so it is pinned explicitly.
+		{days: consts.MinRetentionDays},
+		{days: consts.MinRetentionDays + 20},
 	} {
 		err := checkDays(tc.days)
 		if (err != nil) != tc.wantErr {
 			t.Errorf("checkDays(%d) = %v, want error: %t", tc.days, err, tc.wantErr)
 		}
+	}
+}
+
+// The scheduled summarize job runs alongside the hourly purge, so its lookback must stay inside
+// the purge floor or a day can be deleted mid-window. Pinned from both sides: one day under the
+// floor is allowed, the floor itself is not.
+func TestCheckScheduledDays(t *testing.T) {
+	for _, tc := range []struct {
+		days    int
+		wantErr bool
+	}{
+		{days: 1},
+		{days: consts.SummarizeLookbackDays},
+		{days: consts.MinRetentionDays - 1},
+		{days: consts.MinRetentionDays, wantErr: true},
+		{days: consts.MinRetentionDays + 1, wantErr: true},
+	} {
+		err := checkScheduledDays(tc.days)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("checkScheduledDays(%d) = %v, want error: %t", tc.days, err, tc.wantErr)
+		}
+	}
+}
+
+// The bound is worth nothing unless the scheduled entry point actually applies it. startTasks
+// returns before starting anything here, so no cron outlives the test.
+func TestStartTasksRejectsLookbackPastThePurgeFloor(t *testing.T) {
+	err := startTasks(t.TempDir(), consts.MinRetentionDays)
+	if err == nil {
+		t.Fatal("startTasks accepted a lookback at the purge floor, want an error")
+	}
+	if !strings.Contains(err.Error(), "purge floor") {
+		t.Errorf("startTasks error = %q, want it to name the purge floor", err)
 	}
 }
 

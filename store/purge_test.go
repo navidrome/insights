@@ -110,6 +110,16 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		today = time.Now().UTC().Truncate(24 * time.Hour)
 	})
 
+	// DATA_FOLDER is documented as defaulting to the current directory, and both ingest and
+	// summarization take "" to mean that. statfs is the one caller that cannot: Statfs("")
+	// fails with ENOENT, so retention would never run and the hourly job would log the same
+	// error forever. The real probe is used deliberately — a fake would not exercise it — with
+	// a target of one byte, so the purge returns on the free-space check without touching the
+	// tree the test process happens to be running in.
+	It("probes the current directory when the data folder is empty", func() {
+		Expect(PurgeToFreeSpace("", 1, 7)).To(Succeed())
+	})
+
 	It("succeeds when the reports directory does not exist", func() {
 		newFakeVolume(dir, 0).install()
 

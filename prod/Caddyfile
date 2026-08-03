@@ -1,6 +1,8 @@
-{
-    acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
-}
+# Uncomment to issue certificates from the Let's Encrypt staging CA while testing.
+# Leave commented in production: staging certificates are not publicly trusted.
+# {
+#     acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+# }
 
 insights.navidrome.org {
     encode gzip

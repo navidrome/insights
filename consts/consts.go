@@ -19,14 +19,33 @@ const (
 const (
 	CronSummarize     = "0 */2 * * *" // Every 2 hours
 	CronGenerateChart = "5 0 * * *"   // Daily at 00:05 UTC
-	CronCleanup       = "30 0 * * *"  // Daily at 00:30 UTC
+	// CronCleanup runs hourly, not daily: retention is now driven by free space, and a daily
+	// check cannot stop a volume that fills between two runs. A full disk takes ingest down —
+	// it fails fast by design — so the purge has to get a look in well before that. The :30
+	// offset keeps it off the hour that summarization starts on, on a 1 vCPU box.
+	CronCleanup = "30 * * * *" // Hourly at :30
 )
 
 // Data retention and summarization
 const (
 	SummarizeLookbackDays = 5
-	PurgeRetentionDays    = 15
+	// MinFreeBytes is the free space the purge tries to keep available on the volume holding
+	// the data folder. It is a floor on the whole volume, not a cap on what reports may use:
+	// what matters is that the box keeps working, whatever is consuming the disk.
+	MinFreeBytes = 2 << 30 // 2 GiB
+	// MinRetentionDays is the age below which a report day is never deleted, no matter how
+	// tight the disk is. It is a safety floor, not a target: with free space to spare the
+	// store keeps every day it has.
+	MinRetentionDays = 7
 )
+
+// MinRetentionDays must stay strictly greater than SummarizeLookbackDays. SummarizeData
+// re-reads the last SummarizeLookbackDays days every two hours; if disk pressure deleted a day
+// still inside that window, the day would either drop out of the charts or be rewritten from
+// partial data, with nothing in the logs to say why. This blank constant asserts the invariant
+// at compile time: lowering MinRetentionDays to SummarizeLookbackDays or below makes the
+// expression negative, and a negative constant does not convert to uint.
+const _ = uint(MinRetentionDays - SummarizeLookbackDays - 1)
 
 // Report file storage
 const (

@@ -36,6 +36,9 @@ type fakeVolume struct {
 	usedAtStart uint64
 	probes      int
 	err         error
+	// failAfter is the probe number err starts being returned from, counting from 1. Zero
+	// means the very first probe fails.
+	failAfter int
 }
 
 func newFakeVolume(dir string, freeAtStart uint64) *fakeVolume {
@@ -44,7 +47,7 @@ func newFakeVolume(dir string, freeAtStart uint64) *fakeVolume {
 
 func (v *fakeVolume) probe(string) (uint64, error) {
 	v.probes++
-	if v.err != nil {
+	if v.err != nil && v.probes >= max(v.failAfter, 1) {
 		return 0, v.err
 	}
 	return v.freeAtStart + (v.usedAtStart - reportBytes(v.dir)), nil
@@ -256,6 +259,25 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
+	// The warning fires for any unmet target, and "nothing left to purge" is one of the ways to
+	// get there. Blaming retention then sends the operator to look at a knob that is not the
+	// problem — every day that could go, went.
+	It("does not blame the minimum retention when there is nothing left to purge", func() {
+		writeDay(dir, daysAgo(30), "a")
+		writeDay(dir, daysAgo(20), "b")
+		newFakeVolume(dir, 0).install()
+
+		out := captureLog(func() {
+			Expect(PurgeToFreeSpace(dir, unreachableTarget, 7)).To(Succeed())
+		})
+
+		Expect(HasDay(dir, daysAgo(30))).To(BeFalse())
+		Expect(HasDay(dir, daysAgo(20))).To(BeFalse())
+		Expect(out).To(ContainSubstring("WARNING"))
+		Expect(out).To(ContainSubstring("no report days left to delete"))
+		Expect(out).ToNot(ContainSubstring("minimum retention"))
+	})
+
 	// An unreadable volume is not a licence to start deleting: without a free-space reading
 	// there is no way to know how much, if anything, needs to go.
 	It("deletes nothing and reports the error when the space probe fails", func() {
@@ -266,6 +288,26 @@ var _ = Describe("PurgeToFreeSpace", func() {
 
 		Expect(PurgeToFreeSpace(dir, unreachableTarget, 7)).To(MatchError(ContainSubstring("statfs boom")))
 		Expect(HasDay(dir, daysAgo(30))).To(BeTrue())
+	})
+
+	// When the probe fails mid-purge the only free-space reading in hand predates the deletions
+	// just made. Printing it would report a number that is both stale and, in the one case where
+	// the true value is unknown, presented as if it had been measured.
+	It("reports no free-space figure when the probe fails mid-purge", func() {
+		writeDay(dir, daysAgo(30), "a")
+		writeDay(dir, daysAgo(20), "b")
+		vol := newFakeVolume(dir, 0)
+		vol.err = errors.New("statfs boom")
+		vol.failAfter = 2 // the opening probe succeeds; the one after the first day does not
+		vol.install()
+
+		var err error
+		out := captureLog(func() { err = PurgeToFreeSpace(dir, unreachableTarget, 7) })
+
+		Expect(err).To(MatchError(ContainSubstring("statfs boom")))
+		Expect(HasDay(dir, daysAgo(30))).To(BeFalse())
+		Expect(out).To(ContainSubstring("Purged 1 report day(s), 1 segment(s) before the free-space probe failed"))
+		Expect(out).ToNot(ContainSubstring("MiB"))
 	})
 })
 

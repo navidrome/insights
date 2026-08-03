@@ -19,6 +19,12 @@ func TestCheckDays(t *testing.T) {
 		{days: 0, wantErr: true},
 		{days: 1},
 		{days: consts.SummarizeLookbackDays},
+		// A lookback must stay below the purge floor, or disk pressure can delete a day the
+		// summarize pass is still re-reading. The default satisfies that by construction; the
+		// flag is the way past it, so the boundary is pinned from both sides here.
+		{days: consts.MinRetentionDays - 1},
+		{days: consts.MinRetentionDays, wantErr: true},
+		{days: consts.MinRetentionDays + 1, wantErr: true},
 	} {
 		err := checkDays(tc.days)
 		if (err != nil) != tc.wantErr {

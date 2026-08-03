@@ -72,9 +72,19 @@ func main() {
 // checkDays rejects a lookback that summarizes nothing. Without it, -days 0 or a negative
 // value leaves the every-2h job running as a no-op forever: it still logs "Summarizing data",
 // /healthz stays green, and the summaries silently stop being updated.
+//
+// The upper bound is the same invariant consts asserts at compile time between
+// SummarizeLookbackDays and MinRetentionDays, enforced here for the flag that overrides it.
+// A lookback reaching past the purge floor summarizes days the purge is free to delete under
+// disk pressure, so a day can disappear from the charts between one run and the next with
+// nothing to say why.
 func checkDays(days int) error {
 	if days < 1 {
 		return fmt.Errorf("-days must be at least 1, got %d", days)
+	}
+	if days >= consts.MinRetentionDays {
+		return fmt.Errorf("-days must be below the %d-day purge floor (consts.MinRetentionDays), got %d",
+			consts.MinRetentionDays, days)
 	}
 	return nil
 }

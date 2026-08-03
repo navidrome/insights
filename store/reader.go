@@ -63,7 +63,13 @@ func readSegment(path string, yield func([]byte) bool) bool {
 	if strings.HasSuffix(path, ".gz") {
 		gz, err = gzip.NewReader(f)
 		if err != nil {
-			log.Printf("Report segment %s has no readable gzip data: %s", path, err) //#nosec G706 -- path is derived from controlled inputs
+			// A zero-byte segment is a process killed between creating the file and its
+			// first flush, not damage. It stays on disk for the whole retention window and
+			// every summarization pass reads it, so logging it means a hundred identical
+			// lines a day for something nobody can act on.
+			if !isTruncatedTail(err) {
+				log.Printf("Report segment %s has no readable gzip data: %s", path, err) //#nosec G706 -- path is derived from controlled inputs
+			}
 			return true
 		}
 		r = gz
@@ -98,8 +104,11 @@ func readSegment(path string, yield func([]byte) bool) bool {
 // never terminated. That happens on every read of the segment ingest currently has open
 // (flushed, but the trailer is only written on Close) and on every read of a segment left by
 // a killed process. Neither is corruption, so neither is worth logging.
+//
+// io.EOF is the same thing with nothing written at all: an empty file has no gzip header, so
+// gzip.NewReader reports io.EOF rather than io.ErrUnexpectedEOF.
 func isTruncatedTail(err error) bool {
-	return errors.Is(err, io.ErrUnexpectedEOF)
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
 }
 
 // scanCompleteLines is bufio.ScanLines without its final-token behaviour: a trailing chunk

@@ -125,6 +125,64 @@ func TestRunDrainsInFlightRequestBeforeReturning(t *testing.T) {
 	}
 }
 
+// TestFatalWriterErrorStopsTheServer pins the recovery path for a permanently broken report
+// writer.
+//
+// gzip.Writer latches its first write error forever, so after one ENOSPC or EIO every later
+// Append fails, /collect answers 500 for the rest of the process's life, and /healthz stays
+// green — nothing restarts the container. Shutting the server down instead turns that into a
+// supervisor restart, which opens a fresh segment.
+func TestFatalWriterErrorStopsTheServer(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := store.NewWriter(dir)
+	if err != nil {
+		t.Fatalf("creating writer: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+
+	// Stands in for store.Writer.Fatal: the writer only closes that channel on a real disk
+	// failure, which a test cannot provoke portably. store's own suite covers the closing.
+	fatal := make(chan struct{})
+	ctx, cancel := watchWriter(context.Background(), fatal)
+	defer cancel()
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- run(ctx, ln, newRouter(writer)) }()
+
+	// The server is serving before the failure, so a run that returns below returns because
+	// of the fatal signal and not because it never started.
+	resp, err := http.Get("http://" + ln.Addr().String() + "/healthz")
+	if err != nil {
+		t.Fatalf("probing /healthz: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got status %d from /healthz, want 200", resp.StatusCode)
+	}
+
+	select {
+	case err := <-runErr:
+		t.Fatalf("run returned (err=%v) before the writer failed", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(fatal) // the writer latches an unrecoverable error
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run kept serving after the writer failed permanently: every report would be answered 500 until the process is killed by hand")
+	}
+}
+
 // TestRunReturnsServeError checks that a serve failure comes straight back instead of waiting
 // on a shutdown that will never be signalled. main has to reach writer.Close on this path too,
 // or a process that can never bind leaves the lock file held.

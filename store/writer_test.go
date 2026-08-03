@@ -2,6 +2,8 @@ package store
 
 import (
 	"compress/gzip"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -60,6 +62,16 @@ func readSegments(dataFolder string, date time.Time, tolerateOpenMember bool) []
 		}
 	}
 	return lines
+}
+
+// randomID returns an incompressible string of about n bytes. Writing one forces the deflate
+// writer to spill to the underlying file instead of buffering the record.
+func randomID(n int) string {
+	GinkgoHelper()
+	b := make([]byte, n)
+	_, err := rand.Read(b)
+	Expect(err).ToNot(HaveOccurred())
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 var _ = Describe("Writer", func() {
@@ -199,6 +211,85 @@ var _ = Describe("Writer", func() {
 		Expect(w.Append(dataFor("a"), testDay)).To(MatchError(os.ErrClosed))
 		Expect(DaySegmentPaths(dir, testDay)).To(BeEmpty())
 		Expect(HasDay(dir, testDay)).To(BeFalse())
+	})
+
+	// gzip.Writer latches its first write error forever, and openFor keeps the broken stream
+	// while the day is unchanged. Without a fatal signal, one transient ENOSPC or EIO turns
+	// every later report into a 500 for the rest of the process's life, with nothing but a
+	// log line to show for it.
+	Describe("an unrecoverable write error", func() {
+		// breakFile closes the segment file under the gzip stream, which is how a write
+		// failure reaches gzip.Writer: the next write to the file fails and gzip keeps
+		// returning that error from every call afterwards.
+		breakFile := func(w *Writer) {
+			GinkgoHelper()
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			Expect(w.file).ToNot(BeNil())
+			Expect(w.file.Close()).To(Succeed())
+		}
+
+		It("is reported through Fatal and Err when Flush hits it", func() {
+			w, err := NewWriter(dir)
+			Expect(err).ToNot(HaveOccurred())
+			defer func() { _ = w.Close() }()
+			Expect(w.Append(dataFor("a"), testDay)).To(Succeed())
+			Expect(w.Fatal()).ToNot(BeClosed())
+
+			breakFile(w)
+
+			Expect(w.Flush()).ToNot(Succeed())
+			Expect(w.Fatal()).To(BeClosed())
+			Expect(w.Err()).To(HaveOccurred())
+
+			// The latch is permanent: this is the state that would otherwise 500 forever.
+			Expect(w.Append(dataFor("b"), testDay)).ToNot(Succeed())
+			Expect(w.Fatal()).To(BeClosed())
+		})
+
+		It("is reported through Fatal and Err when Append hits it", func() {
+			w, err := NewWriter(dir)
+			Expect(err).ToNot(HaveOccurred())
+			defer func() { _ = w.Close() }()
+			Expect(w.Append(dataFor("a"), testDay)).To(Succeed())
+
+			breakFile(w)
+
+			// Enough incompressible payload that the deflate writer has to spill to the
+			// file, so the failure surfaces from Append itself and not only from Flush.
+			var appendErr error
+			for i := 0; i < 32 && appendErr == nil; i++ {
+				appendErr = w.Append(dataFor(randomID(64*1024)), testDay)
+			}
+			Expect(appendErr).To(HaveOccurred(), "a broken segment file must fail Append")
+			Expect(w.Fatal()).To(BeClosed())
+			Expect(w.Err()).To(MatchError(appendErr))
+		})
+
+		It("keeps the first error and stays fatal", func() {
+			w, err := NewWriter(dir)
+			Expect(err).ToNot(HaveOccurred())
+			defer func() { _ = w.Close() }()
+			Expect(w.Append(dataFor("a"), testDay)).To(Succeed())
+			breakFile(w)
+			Expect(w.Flush()).ToNot(Succeed())
+
+			first := w.Err()
+			Expect(w.Flush()).ToNot(Succeed())
+			Expect(w.Err()).To(MatchError(first))
+		})
+
+		It("reports nothing while the writer is healthy", func() {
+			w, err := NewWriter(dir)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(w.Append(dataFor("a"), testDay)).To(Succeed())
+			Expect(w.Flush()).To(Succeed())
+			Expect(w.Fatal()).ToNot(BeClosed())
+			Expect(w.Err()).ToNot(HaveOccurred())
+			Expect(w.Close()).To(Succeed())
+			Expect(w.Fatal()).ToNot(BeClosed())
+			Expect(w.Err()).ToNot(HaveOccurred())
+		})
 	})
 
 	It("refuses Flush after Close", func() {

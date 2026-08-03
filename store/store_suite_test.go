@@ -1,9 +1,12 @@
 package store
 
 import (
+	"compress/gzip"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/navidrome/insights/consts"
 	"github.com/navidrome/navidrome/core/metrics/insights"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -24,4 +27,19 @@ func dataFor(id string) insights.Data {
 	d.Version = "0.61.2"
 	d.Library.Tracks = 100
 	return d
+}
+
+// appendPlainLine appends a raw line to the day's last segment as its own gzip member,
+// which is how a hand-edited or corrupt tail looks to a reader.
+func appendPlainLine(dataFolder string, date time.Time, line string) {
+	GinkgoHelper()
+	paths := DaySegmentPaths(dataFolder, date)
+	Expect(paths).ToNot(BeEmpty())
+	f, err := os.OpenFile(paths[len(paths)-1], os.O_WRONLY|os.O_APPEND, consts.FilePermissions) //#nosec G304 -- test-only path from the suite's TempDir
+	Expect(err).ToNot(HaveOccurred())
+	defer func() { _ = f.Close() }()
+	gz := gzip.NewWriter(f)
+	_, err = gz.Write([]byte(line + "\n"))
+	Expect(err).ToNot(HaveOccurred())
+	Expect(gz.Close()).To(Succeed())
 }

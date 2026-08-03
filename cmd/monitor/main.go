@@ -2,35 +2,38 @@ package main
 
 import (
 	"cmp"
-	"database/sql"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"iter"
 	"log"
 	"math"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
-	"github.com/navidrome/insights/db"
+	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/store"
 	"github.com/navidrome/navidrome/core/metrics/insights"
 )
 
 func main() {
-	dbPath := flag.String("db", "", "Path to insights.db (default: $DATA_FOLDER/insights.db or ./insights.db)")
+	dataFolder := flag.String("data", "", "Data folder (default: $DATA_FOLDER or .)")
+	dateStr := flag.String("date", "", "UTC day to report on, YYYY-MM-DD (default: today)")
 	flag.Parse()
 
-	// Determine database path
-	dbFile := *dbPath
-	if dbFile == "" {
-		dataFolder := cmp.Or(os.Getenv("DATA_FOLDER"), ".")
-		dbFile = filepath.Join(dataFolder, "insights.db")
+	folder := cmp.Or(*dataFolder, os.Getenv("DATA_FOLDER"), ".")
+
+	date := time.Now().UTC().Truncate(24 * time.Hour)
+	if *dateStr != "" {
+		parsed, err := time.ParseInLocation(consts.DateFormat, *dateStr, time.UTC)
+		if err != nil {
+			log.Fatalf("Invalid -date %q: %v", *dateStr, err)
+		}
+		date = parsed
 	}
 
-	if err := run(dbFile); err != nil {
+	if err := run(folder, date); err != nil {
 		log.Fatalf("Error: %v", err)
 	}
 }
@@ -50,18 +53,14 @@ type trackStats struct {
 	Mean float64
 }
 
-func run(dbPath string) error {
-	// Open database
-	dbConn, err := db.OpenDB(dbPath)
-	if err != nil {
-		return fmt.Errorf("opening database %s: %w", dbPath, err)
+func run(dataFolder string, date time.Time) error {
+	if !store.HasDay(dataFolder, date) {
+		return fmt.Errorf("no report file for %s", date.Format(consts.DateFormat))
 	}
-	defer func() { _ = dbConn.Close() }()
 
-	// Query for last 24 hours - get the latest entry per instance ID
-	rows, err := selectLast24Hours(dbConn)
+	rows, err := store.LastPerID(dataFolder, date)
 	if err != nil {
-		return fmt.Errorf("selecting data: %w", err)
+		return fmt.Errorf("reading reports: %w", err)
 	}
 
 	// Collect statistics
@@ -94,7 +93,7 @@ func run(dbPath string) error {
 	}
 
 	if s.numInstances == 0 {
-		return fmt.Errorf("no data found in the last 24 hours")
+		return fmt.Errorf("no data found for %s", date.Format(consts.DateFormat))
 	}
 
 	s.trackStats = calcTrackStats(trackValues)
@@ -215,43 +214,4 @@ func calcTrackStats(values []int64) *trackStats {
 		Max:  maxVal,
 		Mean: float64(sum) / float64(len(values)),
 	}
-}
-
-// selectLast24Hours returns the latest entry per instance ID from the last 24 hours
-func selectLast24Hours(dbConn *sql.DB) (iter.Seq[insights.Data], error) {
-	query := `
-SELECT i1.id, i1.time, i1.data
-FROM insights i1
-INNER JOIN (
-    SELECT id, MAX(time) as max_time
-    FROM insights
-    WHERE time > datetime('now', '-24 hours')
-    GROUP BY id
-) i2 ON i1.id = i2.id AND i1.time = i2.max_time
-WHERE i1.time > datetime('now', '-24 hours')
-ORDER BY i1.id, i1.time DESC;`
-
-	rows, err := dbConn.Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("querying data: %w", err)
-	}
-
-	return func(yield func(insights.Data) bool) {
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var id, t, j string
-			if err := rows.Scan(&id, &t, &j); err != nil {
-				log.Printf("Error scanning row: %s", err)
-				return
-			}
-			var data insights.Data
-			if err := json.Unmarshal([]byte(j), &data); err != nil {
-				log.Printf("Error unmarshalling data: %s", err)
-				return
-			}
-			if !yield(data) {
-				return
-			}
-		}
-	}, nil
 }

@@ -1,12 +1,68 @@
 package main
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/navidrome/insights/consts"
 	"github.com/robfig/cron/v3"
 )
+
+func TestCheckDays(t *testing.T) {
+	for _, tc := range []struct {
+		days    int
+		wantErr bool
+	}{
+		{days: -1, wantErr: true},
+		{days: 0, wantErr: true},
+		{days: 1},
+		{days: consts.SummarizeLookbackDays},
+	} {
+		err := checkDays(tc.days)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("checkDays(%d) = %v, want error: %t", tc.days, err, tc.wantErr)
+		}
+	}
+}
+
+// TestSummarizeSerializesOverlappingRuns pins the mutual exclusion main relies on.
+//
+// main starts a summarization run in a goroutine while the cron for the same job is already
+// running, so a restart at the top of an even hour has both going at once. Each one ends in a
+// write of the same summary file per date, and a run takes minutes of gzip scanning on the
+// production box, so overlapping runs are what tears a summary file rather than a theoretical
+// race. cron.SkipIfStillRunning would not cover this: the startup run is not a cron job.
+func TestSummarizeSerializesOverlappingRuns(t *testing.T) {
+	original := summarizeDay
+	t.Cleanup(func() { summarizeDay = original })
+
+	var active, overlaps atomic.Int32
+	summarizeDay = func(string, time.Time) error {
+		if active.Add(1) > 1 {
+			overlaps.Add(1)
+		}
+		time.Sleep(time.Millisecond)
+		active.Add(-1)
+		return nil
+	}
+
+	job := summarize(t.TempDir(), 3)
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			job()
+		}()
+	}
+	wg.Wait()
+
+	if n := overlaps.Load(); n != 0 {
+		t.Fatalf("got %d overlapping summarization runs, want 0: concurrent runs write the same summary file", n)
+	}
+}
 
 // The scheduled jobs are the only reason this binary exists, and a missing one fails silently:
 // nothing errors, the work just never runs. Pin every schedule that must be registered.

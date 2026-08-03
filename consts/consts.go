@@ -23,12 +23,23 @@ const (
 	PurgeRetentionDays    = 15
 )
 
+// Report file storage
+const (
+	// FlushInterval bounds how much buffered data an unclean shutdown can lose.
+	// Measured cost against one-shot compression: 0.7%.
+	FlushInterval = 30 * time.Second
+	// MaxLineBytes caps a single report line. Payloads average ~1.6KB.
+	MaxLineBytes = 4 * 1024 * 1024
+)
+
 // File paths and directories
 const (
 	ChartDataDir   = "web/chartdata"
 	WebIndexPath   = "web/index.html"
 	ChartsJSONFile = "charts.json"
 	SummariesDir   = "summaries"
+	ReportsDir     = "reports"
+	ReportFileExt  = ".ndjson.gz"
 )
 
 // File permissions

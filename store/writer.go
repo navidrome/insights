@@ -19,6 +19,12 @@ import (
 // gzip stream would interleave members and corrupt the file, so the second one must fail loudly.
 const lockFileName = ".ingest.lock"
 
+// syncFile pushes a segment's buffered writes to the device. It is a package-level variable so
+// tests can simulate a writeback failure: fsync fails on a full or failing volume, which is not
+// something a test can provoke portably, and it is the one unrecoverable error here that never
+// surfaces from a write call.
+var syncFile = (*os.File).Sync
+
 // Writer appends reports to the current UTC day's segment. It is safe for concurrent use.
 //
 // A Writer never reopens a segment written by another session: the first Append of a day
@@ -206,8 +212,15 @@ func (w *Writer) Flush() error {
 	if err := w.gz.Flush(); err != nil {
 		return w.fail(fmt.Errorf("flushing gzip stream: %w", err))
 	}
-	if err := w.file.Sync(); err != nil {
-		return fmt.Errorf("syncing report file: %w", err)
+	if err := syncFile(w.file); err != nil {
+		// Latched like the gzip errors, and for the same reason. A sync failure is writeback
+		// reporting an ENOSPC or EIO for bytes this process already handed to the kernel and
+		// believes are on disk: earlier records may be gone, and every later Append keeps
+		// piling onto a deflate stream whose prefix is damaged. Returning it plain left the
+		// Writer "healthy" — /healthz green, reports answered 200 — while the segment tail
+		// silently rotted. An earlier round made this non-fatal deliberately; that call was
+		// wrong, because there is no way to tell a lost write from a durable one afterwards.
+		return w.fail(fmt.Errorf("syncing report file: %w", err))
 	}
 	return nil
 }

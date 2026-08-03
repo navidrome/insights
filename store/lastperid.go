@@ -106,7 +106,13 @@ func winningPositions(dataFolder string, date time.Time) ([]int32, error) {
 			pos++
 			continue
 		}
+		// A line with no "time" field leaves the zero time.Time, whose UnixNano is a large
+		// negative number. Such records therefore tie with each other — the later position
+		// wins — and lose to any record that carries a real timestamp.
 		ts := h.Time.UnixNano()
+		// Ties go to the later position. The comparison is written out rather than folded
+		// away: pos only ever increases, so the clause is always true when reached, but it is
+		// the only place the rule for two records sharing a second is stated.
 		if cur, ok := best[h.Data.InsightsID]; !ok || ts > cur.ts || (ts == cur.ts && pos > cur.pos) {
 			best[h.Data.InsightsID] = winner{pos: pos, ts: ts}
 		}

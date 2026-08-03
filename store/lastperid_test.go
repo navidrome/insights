@@ -78,6 +78,9 @@ var _ = Describe("LastPerID", func() {
 		Expect(got).To(Equal([]int64{999}))
 	})
 
+	// All three lines for "a" carry the same second, so this also pins the tie-break: the
+	// writeDay record at position 0 has Tracks 100 and the two appended lines have Tracks 0,
+	// so the payload says which of the tied positions won. Later position must win.
 	It("collapses byte-identical duplicate lines to one record", func() {
 		writeDay(dir, testDay, "a")
 		line := `{"time":"2026-08-03T00:00:00Z","data":{"id":"a"}}`
@@ -88,10 +91,13 @@ var _ = Describe("LastPerID", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		var ids []string
+		var tracks []int64
 		for d := range seq {
 			ids = append(ids, d.InsightsID)
+			tracks = append(tracks, d.Library.Tracks)
 		}
 		Expect(ids).To(Equal([]string{"a"}))
+		Expect(tracks).To(Equal([]int64{0}), "the last of the tied positions must win, not the first")
 	})
 
 	It("ignores records appended after the first pass", func() {

@@ -11,11 +11,13 @@ import (
 	"github.com/navidrome/insights/summary"
 )
 
+// cleanup keeps free space on the data volume above consts.MinFreeBytes by deleting the oldest
+// report days. It runs hourly and says nothing on the runs where there is room to spare, so a
+// line from it always means the disk is under pressure.
 func cleanup(dataFolder string) func() {
 	return func() {
-		log.Print("Cleaning old data")
-		if err := store.PurgeOldFiles(dataFolder, consts.PurgeRetentionDays); err != nil {
-			log.Printf("Error cleaning old data: %v", err)
+		if err := store.PurgeToFreeSpace(dataFolder, consts.MinFreeBytes, consts.MinRetentionDays); err != nil {
+			log.Printf("Error purging old reports: %v", err)
 		}
 	}
 }

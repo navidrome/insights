@@ -26,7 +26,11 @@ worker never interrupts collection. Both run from the same `DATA_FOLDER`.
 2. Cron every 2h: `summary.SummarizeData()` aggregates the last 5 days →
    `summaries/YYYY/MM/summary-YYYY-MM-DD.json`
 3. Cron daily 00:05 UTC: `charts.ExportChartsJSON()` → `web/chartdata/charts.json`
-4. Cron daily 00:30 UTC: `store.PurgeOldFiles()` deletes report files older than 15 days
+4. Cron hourly at :30: `store.PurgeToFreeSpace()` deletes whole report days, oldest first,
+   until the data volume has `consts.MinFreeBytes` free. Retention is driven by free space, not
+   by age: with room to spare every day is kept, and a day younger than
+   `consts.MinRetentionDays` is never deleted (that floor must stay above
+   `consts.SummarizeLookbackDays`, which a compile-time assertion in `consts` enforces)
 5. `/api/charts` (served by `process`) returns `charts.json` (protected by `API_KEY` if set,
    public otherwise)
 

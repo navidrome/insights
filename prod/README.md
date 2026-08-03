@@ -117,8 +117,12 @@ Both must pass. Run the first a few minutes after deploying.
 
 ## After the cutover
 
-- **Retire the rotation cron.** Remove `rotate.sh` and its crontab entry: `process` purges
-  report files older than 15 days on its own, daily at 00:30 UTC.
-- **Delete the old database after ~15 days.** Once that many days of report files exist and
+- **Retire the rotation cron.** Remove `rotate.sh` and its crontab entry: `process` manages
+  retention on its own, hourly at :30. It deletes whole report days, oldest first, only when
+  free space on the data volume is below 2 GiB, and never touches a day younger than 7 days.
+  With ~18 MB per day on a 9.8 GB volume, that means months of history are kept rather than a
+  fixed window — and if it ever logs `WARNING: ... minimum retention`, reports are not what is
+  filling the disk and something needs looking at by hand.
+- **Delete the old database after ~2 weeks.** Once that many days of report files exist and
   summaries look correct, remove `~/insights.db*` and `~/backups/`. Until then they are the
   rollback path.

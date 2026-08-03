@@ -28,9 +28,13 @@ import (
 	"github.com/navidrome/navidrome/core/metrics/insights"
 )
 
-// Segment indexes are zero-padded to a fixed width so that lexicographic order over file
-// names is also chronological order. maxSegmentIndex is the largest index that fits that
-// width; beyond it the padding, and so the ordering guarantee, would break.
+// Segment indexes are zero-padded to a fixed width. Ordering does not rest on that: daySegments
+// sorts on the parsed number, not on the name, so the padding is cosmetic — it keeps a day's
+// segments in order in an `ls`. The width is load-bearing in exactly one place. segmentIndex
+// accepts a run of exactly segmentIndexDigits digits, so a segment numbered past
+// maxSegmentIndex would not be recognized as a segment at all and its records would be
+// invisible to every reader. That is why exhausting the range is treated as unrecoverable
+// rather than as a reason to widen the field here.
 const (
 	segmentIndexDigits = 3
 	maxSegmentIndex    = 999

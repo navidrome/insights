@@ -287,8 +287,19 @@ var _ = Describe("Writer", func() {
 		// belong to keeps growing. Returned plain, it left the Writer healthy — green
 		// /healthz, 200s to reporters — while the segment tail silently rotted.
 		It("is reported through Fatal and Err when the file sync fails", func() {
+			// Installed once, before the Writer exists, and restored only after Close has
+			// joined the flush loop: that loop calls syncFile on its own goroutine, so
+			// reassigning this global mid-spec would be an unsynchronized write to a live
+			// reader. The counter is only ever touched from inside Flush, under w.mu.
 			prev := syncFile
-			syncFile = func(*os.File) error { return errors.New("fsync boom") }
+			var syncs int
+			syncFile = func(f *os.File) error {
+				syncs++
+				if syncs == 1 {
+					return errors.New("fsync boom")
+				}
+				return prev(f)
+			}
 			DeferCleanup(func() { syncFile = prev })
 
 			w, err := NewWriter(dir)
@@ -302,9 +313,8 @@ var _ = Describe("Writer", func() {
 			Expect(w.Fatal()).To(BeClosed())
 			Expect(w.Err()).To(MatchError(flushErr))
 
-			// Kept, so a later sync that happens to succeed does not talk the process out of
-			// shutting down: nothing after the fact can tell a lost write from a durable one.
-			syncFile = prev
+			// Kept, so the next sync succeeding does not talk the process out of shutting
+			// down: nothing after the fact can tell a lost write from a durable one.
 			_ = w.Flush()
 			Expect(w.Err()).To(MatchError(flushErr))
 			Expect(w.Fatal()).To(BeClosed())

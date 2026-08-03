@@ -12,21 +12,25 @@ lint:
 .PHONY: lint
 
 linux:
-	docker buildx build --platform linux/amd64 --target binary --output binary docker/app-prod
+	docker buildx build --platform linux/amd64 --target binary --output binary -f docker/app-prod/Dockerfile .
 .PHONY: linux
-
-consolidate:
-	@if [ -z "$(BACKUPS)" ] || [ -z "$(DEST)" ]; then \
-		echo "Usage: make consolidate BACKUPS=<path-to-backups> DEST=<destination-folder>"; \
-		exit 1; \
-	fi
-	go run ./cmd/consolidate -backups "$(BACKUPS)" -dest "$(DEST)"
-.PHONY: consolidate
 
 summarize:
 	@if [ -z "$(DATA)" ]; then \
-		echo "Usage: make summarize DATA=<destination-folder>"; \
+		echo "Usage: make summarize DATA=<data-folder> [DAYS=5]"; \
 		exit 1; \
 	fi
-	go run ./cmd/consolidate -summaries-only -dest "$(DATA)"
+	DATA_FOLDER="$(DATA)" go run ./cmd/process -once -days $(or $(DAYS),5)
 .PHONY: summarize
+
+monitor:
+	@if [ -z "$(DATA)" ]; then \
+		echo "Usage: make monitor DATA=<data-folder> [DATE=YYYY-MM-DD]"; \
+		exit 1; \
+	fi
+	go run ./cmd/monitor -data "$(DATA)" $(if $(DATE),-date $(DATE),)
+.PHONY: monitor
+
+test:
+	go test ./...
+.PHONY: test

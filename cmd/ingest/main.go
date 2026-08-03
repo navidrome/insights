@@ -88,7 +88,7 @@ func run(ctx context.Context, ln net.Listener, h http.Handler) error {
 	}
 
 	done := make(chan struct{})
-	go func() {
+	go func() { //#nosec G118 -- the shutdown deadline must not derive from ctx: ctx is already cancelled here, so a derived context would expire immediately and abort the drain
 		defer close(done)
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)

@@ -19,14 +19,19 @@ import (
 // gzip stream would interleave members and corrupt the file, so the second one must fail loudly.
 const lockFileName = ".ingest.lock"
 
-// Writer appends reports to the current UTC day's file. It is safe for concurrent use.
+// Writer appends reports to the current UTC day's segment. It is safe for concurrent use.
+//
+// A Writer never reopens a segment written by another session: the first Append of a day
+// creates a new segment, so a previous process's unterminated gzip member is left alone
+// instead of being appended to, which would corrupt the rest of that day.
 type Writer struct {
 	mu     sync.Mutex
 	folder string
 	lock   *os.File
 	file   *os.File
 	gz     *gzip.Writer
-	day    string // UTC date of the open file, consts.DateFormat
+	day    string // UTC date of the open segment, consts.DateFormat
+	closed bool
 
 	stop      chan struct{}
 	wg        sync.WaitGroup
@@ -72,7 +77,8 @@ func (w *Writer) flushLoop() {
 	}
 }
 
-// Append writes one report as a JSON line into the file for t's UTC day.
+// Append writes one report as a JSON line into the segment for t's UTC day.
+// It returns os.ErrClosed once the Writer has been closed.
 func (w *Writer) Append(data insights.Data, t time.Time) error {
 	line, err := json.Marshal(Record{Time: t.UTC(), Data: data})
 	if err != nil {
@@ -82,6 +88,9 @@ func (w *Writer) Append(data insights.Data, t time.Time) error {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("appending to a closed writer: %w", os.ErrClosed)
+	}
 	if err := w.openFor(t); err != nil {
 		return err
 	}
@@ -91,8 +100,8 @@ func (w *Writer) Append(data insights.Data, t time.Time) error {
 	return nil
 }
 
-// openFor ensures the file for t's UTC day is open, rolling over if the day changed.
-// Callers must hold w.mu.
+// openFor ensures a segment for t's UTC day is open, rolling over to a new segment if the
+// day changed. Callers must hold w.mu.
 func (w *Writer) openFor(t time.Time) error {
 	day := t.UTC().Format(consts.DateFormat)
 	if w.gz != nil && w.day == day {
@@ -102,13 +111,18 @@ func (w *Writer) openFor(t time.Time) error {
 		return err
 	}
 
-	path := DayFilePath(w.folder, t)
+	path, err := NextSegmentPath(w.folder, t)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), consts.DirPermissions); err != nil {
 		return fmt.Errorf("creating day dir: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, consts.FilePermissions) //#nosec G304 -- path built from controlled env var and constants
+	// O_EXCL: NextSegmentPath picked an unused index, so an existing file here means another
+	// process is writing this day. Truncating or appending to it would corrupt both streams.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, consts.FilePermissions) //#nosec G304 -- path built from controlled env var and constants
 	if err != nil {
-		return fmt.Errorf("opening %s: %w", path, err)
+		return fmt.Errorf("creating %s: %w", path, err)
 	}
 
 	w.file = f
@@ -117,7 +131,7 @@ func (w *Writer) openFor(t time.Time) error {
 	return nil
 }
 
-// closeFile terminates the current gzip member and closes the file. Callers must hold w.mu.
+// closeFile terminates the current gzip member and closes the segment. Callers must hold w.mu.
 func (w *Writer) closeFile() error {
 	if w.gz == nil {
 		return nil
@@ -134,10 +148,14 @@ func (w *Writer) closeFile() error {
 	return nil
 }
 
-// Flush makes everything appended so far readable and durable.
+// Flush makes everything appended so far readable and durable. It does not close the gzip
+// member. It returns os.ErrClosed once the Writer has been closed.
 func (w *Writer) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("flushing a closed writer: %w", os.ErrClosed)
+	}
 	if w.gz == nil {
 		return nil
 	}
@@ -160,6 +178,9 @@ func (w *Writer) Close() error {
 
 		w.mu.Lock()
 		defer w.mu.Unlock()
+		// Marked closed under the lock so an Append racing shutdown fails instead of
+		// reopening a segment with no lock held and no flush loop running.
+		w.closed = true
 		err = w.closeFile()
 		if w.lock != nil {
 			_ = syscall.Flock(int(w.lock.Fd()), syscall.LOCK_UN)

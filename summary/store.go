@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/internal/fsutil"
 )
 
 type SummaryRecord struct {
@@ -44,36 +45,10 @@ func SaveSummary(summary Summary, t time.Time) error {
 		return err
 	}
 
-	return writeFileAtomic(filePath, data)
-}
-
-// writeFileAtomic replaces path in one step: a reader either sees the previous contents or the
-// new ones, never the empty file that an O_TRUNC write leaves behind while it is in progress.
-// GetSummaries runs concurrently with summarization and would log such a file as malformed and
-// drop that day from the charts.
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	// Same directory, so the rename stays within one filesystem and is therefore atomic.
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }() // no-op once the rename succeeded
-
-	// CreateTemp makes the file 0600; set the mode explicitly so it does not depend on that.
-	if err := tmp.Chmod(consts.FilePermissions); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	// Atomic because GetSummaries runs concurrently with summarization: a reader that catches
+	// an O_TRUNC write in progress logs the file as malformed and drops that day from the
+	// charts. See fsutil.WriteFileAtomic.
+	return fsutil.WriteFileAtomic(filePath, data, consts.FilePermissions)
 }
 
 // summaryFileRegex matches files like "summary-2025-11-29.json"

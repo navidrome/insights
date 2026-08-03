@@ -16,6 +16,7 @@ import (
 	"github.com/go-echarts/go-echarts/v2/components"
 	"github.com/go-echarts/go-echarts/v2/opts"
 	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/internal/fsutil"
 	"github.com/navidrome/insights/summary"
 )
 
@@ -905,9 +906,11 @@ func ExportChartsJSON(outputDir string) error {
 		return err
 	}
 
-	// Write to file
+	// Written atomically: cmd/process serves this very file at /api/charts, so a plain
+	// O_TRUNC rewrite would answer a request landing in the window with a truncated body,
+	// and a restart near 00:05 UTC can put two chart generations into that window at once.
 	outputPath := filepath.Join(outputDir, consts.ChartsJSONFile)
-	if err := os.WriteFile(outputPath, jsonData, consts.FilePermissions); err != nil {
+	if err := fsutil.WriteFileAtomic(outputPath, jsonData, consts.FilePermissions); err != nil {
 		return err
 	}
 

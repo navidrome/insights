@@ -5,14 +5,17 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/navidrome/insights/consts"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -277,6 +280,29 @@ var _ = Describe("Writer", func() {
 			first := w.Err()
 			Expect(w.Flush()).ToNot(Succeed())
 			Expect(w.Err()).To(MatchError(first))
+		})
+
+		// Running out of segment indexes is unrecoverable in the same way: openFor asks for the
+		// same day on every later Append and gets the same refusal. Without the latch, ingest
+		// answers 500 to every report until UTC midnight with /healthz still green, so nothing
+		// marks the container unhealthy or restarts it — the failure mode this Writer exists to
+		// avoid. A restart does not free indexes, so this becomes a visible crash-loop instead.
+		It("is reported through Fatal and Err when the day runs out of segment indexes", func() {
+			dayPath := dayDir(dir, testDay)
+			Expect(os.MkdirAll(dayPath, 0750)).To(Succeed())
+			for i := 1; i <= maxSegmentIndex; i++ {
+				name := fmt.Sprintf("%s%03d%s", segmentPrefix(testDay), i, consts.ReportFileExt)
+				Expect(os.WriteFile(filepath.Join(dayPath, name), []byte{}, 0600)).To(Succeed())
+			}
+
+			w, err := NewWriter(dir)
+			Expect(err).ToNot(HaveOccurred())
+			defer func() { _ = w.Close() }()
+
+			appendErr := w.Append(dataFor("a"), testDay)
+			Expect(appendErr).To(MatchError(ContainSubstring("highest index")))
+			Expect(w.Fatal()).To(BeClosed())
+			Expect(w.Err()).To(MatchError(appendErr))
 		})
 
 		It("reports nothing while the writer is healthy", func() {

@@ -146,7 +146,18 @@ func (w *Writer) openFor(t time.Time) error {
 
 	path, err := NextSegmentPath(w.folder, t)
 	if err != nil {
-		return err
+		// Index exhaustion is unrecoverable from inside the Writer, exactly like a latched
+		// gzip error: every later Append picks the same day and gets the same refusal, so
+		// without the latch ingest answers 500 to every report until UTC midnight while
+		// /healthz stays green and nothing restarts the container.
+		//
+		// The honest tradeoff: a restart does not free indexes, so the process comes back,
+		// fails on its first Append and exits again — a crash-loop until the day rolls over,
+		// rather than a silent one. That is the intended trade. A crash-loop is observable in
+		// `docker compose ps`, in the exit status and in the restart count; 500s behind a
+		// green /healthz are not. Reaching 999 writer sessions in one day already means
+		// something is badly wrong and needs an operator either way.
+		return w.fail(err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), consts.DirPermissions); err != nil {
 		return fmt.Errorf("creating day dir: %w", err)

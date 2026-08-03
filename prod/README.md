@@ -77,14 +77,21 @@ Both must pass. Run the first a few minutes after deploying.
 
    ```bash
    ls -la ~/reports/$(date -u +%Y)/$(date -u +%m)/
-   zcat ~/reports/$(date -u +%Y)/$(date -u +%m)/reports-$(date -u +%F).*.ndjson.gz | wc -l
+   zcat ~/reports/$(date -u +%Y)/$(date -u +%m)/reports-$(date -u +%F).*.ndjson.gz 2>/dev/null | wc -l
    sleep 60
-   zcat ~/reports/$(date -u +%Y)/$(date -u +%m)/reports-$(date -u +%F).*.ndjson.gz | wc -l
+   zcat ~/reports/$(date -u +%Y)/$(date -u +%m)/reports-$(date -u +%F).*.ndjson.gz 2>/dev/null | wc -l
    ```
 
    Files are named `reports-YYYY-MM-DD.NNN.ndjson.gz`; each `ingest` restart opens a new
    segment, so expect more than one per day. Buffered data is flushed every 30s, so wait at
    least that long before comparing counts.
+
+   **`zcat` will warn `unexpected end of file` and exit non-zero on the newest segment. That
+   is normal, not corruption** — `ingest` holds that segment open, so its final gzip member
+   has no trailer until the process stops. GNU `zcat` still prints every record before
+   warning, which is why the `2>/dev/null` above is enough; do not run these under `set -e`.
+   The server reads the same file correctly. (BSD/macOS `gzip` is stricter and prints
+   *nothing* for such a segment — read segments on the server, not on a laptop.)
 
 2. **The charts endpoint serves, and requires the key:**
 

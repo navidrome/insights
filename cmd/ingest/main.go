@@ -41,6 +41,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// A latched gzip error is permanent: every later report would be answered 500 for the
+	// rest of this process's life, while /healthz stayed green. Treat it as a shutdown
+	// signal instead, so the in-flight drain and writer.Close still run and the supervisor
+	// restarts us into a fresh segment.
+	ctx, cancel := watchWriter(ctx, writer.Fatal())
+	defer cancel()
+
 	// A failure to bind falls through rather than exiting, so writer.Close below still
 	// releases the lock file.
 	ln, err := net.Listen("tcp", ":"+port)
@@ -57,7 +64,29 @@ func main() {
 	if err := writer.Close(); err != nil {
 		log.Printf("Error closing report writer: %s", err)
 	}
+	if err := writer.Err(); err != nil {
+		// Exit non-zero so the failure is visible in `docker compose ps` and in the exit
+		// status, rather than looking like a clean stop. The deferred cancels are skipped
+		// on purpose: the drain and writer.Close have already run.
+		log.Printf("Ingest stopped after an unrecoverable write error: %s", err)
+		os.Exit(1)
+	}
 	log.Print("Ingest stopped")
+}
+
+// watchWriter derives a context that is cancelled either with its parent or as soon as the
+// report writer reports an unrecoverable error, whichever comes first.
+func watchWriter(parent context.Context, fatal <-chan struct{}) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	go func() {
+		select {
+		case <-fatal:
+			log.Print("Report writer failed permanently, shutting down")
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
 }
 
 // newRouter wires the two public endpoints. Only /collect is rate limited: /healthz has to stay

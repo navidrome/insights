@@ -24,15 +24,23 @@ const lockFileName = ".ingest.lock"
 // A Writer never reopens a segment written by another session: the first Append of a day
 // creates a new segment, so a previous process's unterminated gzip member is left alone
 // instead of being appended to, which would corrupt the rest of that day.
+//
+// A gzip.Writer latches its first write error forever: every later Write, Flush and Close
+// returns that same error even once the underlying cause (a full disk, a transient EIO) is
+// gone, and openFor keeps the broken stream because the day has not changed. That state is
+// unrecoverable from inside the Writer, so it is reported through Fatal and Err instead of
+// being retried silently. The caller is expected to shut the process down; see cmd/ingest.
 type Writer struct {
-	mu     sync.Mutex
-	folder string
-	lock   *os.File
-	file   *os.File
-	gz     *gzip.Writer
-	day    string // UTC date of the open segment, consts.DateFormat
-	closed bool
+	mu       sync.Mutex
+	folder   string
+	lock     *os.File
+	file     *os.File
+	gz       *gzip.Writer
+	day      string // UTC date of the open segment, consts.DateFormat
+	closed   bool
+	fatalErr error
 
+	fatal     chan struct{}
 	stop      chan struct{}
 	wg        sync.WaitGroup
 	closeOnce sync.Once
@@ -55,7 +63,7 @@ func NewWriter(dataFolder string) (*Writer, error) {
 		return nil, fmt.Errorf("another ingest instance holds the lock on %s: %w", dir, err)
 	}
 
-	w := &Writer{folder: dataFolder, lock: lock, stop: make(chan struct{})}
+	w := &Writer{folder: dataFolder, lock: lock, stop: make(chan struct{}), fatal: make(chan struct{})}
 	w.wg.Add(1)
 	go w.flushLoop()
 	return w, nil
@@ -95,9 +103,34 @@ func (w *Writer) Append(data insights.Data, t time.Time) error {
 		return err
 	}
 	if _, err := w.gz.Write(line); err != nil {
-		return fmt.Errorf("writing record: %w", err)
+		return w.fail(fmt.Errorf("writing record: %w", err))
 	}
 	return nil
+}
+
+// fail records an unrecoverable gzip error and wakes everything waiting on Fatal. Only the
+// first one is kept: later calls return the same error the caller passed in, unchanged.
+// Callers must hold w.mu.
+func (w *Writer) fail(err error) error {
+	if w.fatalErr == nil {
+		w.fatalErr = err
+		close(w.fatal)
+	}
+	return err
+}
+
+// Fatal returns a channel that is closed once the Writer hits an error it cannot recover
+// from. Nothing appended after that point can be written, so the caller must stop the
+// process rather than keep rejecting reports: a restart opens a fresh segment.
+func (w *Writer) Fatal() <-chan struct{} {
+	return w.fatal
+}
+
+// Err returns the unrecoverable error behind Fatal, or nil while the Writer is healthy.
+func (w *Writer) Err() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.fatalErr
 }
 
 // openFor ensures a segment for t's UTC day is open, rolling over to a new segment if the
@@ -160,7 +193,7 @@ func (w *Writer) Flush() error {
 		return nil
 	}
 	if err := w.gz.Flush(); err != nil {
-		return fmt.Errorf("flushing gzip stream: %w", err)
+		return w.fail(fmt.Errorf("flushing gzip stream: %w", err))
 	}
 	if err := w.file.Sync(); err != nil {
 		return fmt.Errorf("syncing report file: %w", err)

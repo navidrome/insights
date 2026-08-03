@@ -101,8 +101,9 @@ func daySegments(dataFolder string, date time.Time) ([]int, []string) {
 
 	prefix := segmentPrefix(date)
 	type segment struct {
-		index int
-		name  string
+		index      int
+		name       string
+		compressed bool
 	}
 	var segments []segment
 	for _, e := range entries {
@@ -110,21 +111,36 @@ func daySegments(dataFolder string, date time.Time) ([]int, []string) {
 			continue
 		}
 		if index, ok := segmentIndex(e.Name(), prefix); ok {
-			segments = append(segments, segment{index: index, name: e.Name()})
+			segments = append(segments, segment{
+				index:      index,
+				name:       e.Name(),
+				compressed: strings.HasSuffix(e.Name(), ".gz"),
+			})
 		}
 	}
-	// Sort by index first so that ordering follows the number, not the string; the name
-	// breaks ties between the compressed and uncompressed form of the same index.
+	// Sort by index so that ordering follows the number, not the string. When the same index
+	// exists in both forms, the compressed one sorts first and the plain one is dropped below.
 	slices.SortFunc(segments, func(a, b segment) int {
 		if a.index != b.index {
 			return a.index - b.index
 		}
-		return strings.Compare(a.name, b.name)
+		if a.compressed != b.compressed {
+			if a.compressed {
+				return -1
+			}
+			return 1
+		}
+		return 0
 	})
 
 	indexes := make([]int, 0, len(segments))
 	paths := make([]string, 0, len(segments))
 	for _, s := range segments {
+		// One entry per index: a caller that read both forms of a segment would count every
+		// record in it twice.
+		if len(indexes) > 0 && indexes[len(indexes)-1] == s.index {
+			continue
+		}
 		indexes = append(indexes, s.index)
 		paths = append(paths, filepath.Join(dir, s.name))
 	}
@@ -132,28 +148,31 @@ func daySegments(dataFolder string, date time.Time) ([]int, []string) {
 }
 
 // DaySegmentPaths returns the existing report segments for the UTC day of date, oldest
-// first. Both the compressed and the uncompressed form are returned. The result is empty
-// when the day has no segments.
+// first, exactly one path per segment index: if a segment exists both compressed and
+// uncompressed, only the compressed one is returned. The result is empty when the day has
+// no segments.
 func DaySegmentPaths(dataFolder string, date time.Time) []string {
 	_, paths := daySegments(dataFolder, date)
 	return paths
 }
 
 // NextSegmentPath returns the path a new writer session should create for the UTC day of
-// date: the lowest index not already on disk. It does not create the file or its directory.
+// date: one past the highest index on disk. It does not create the file or its directory.
+//
+// Indexes are never reused, not even one freed by deleting a segment by hand. Readers take
+// segment order to be write order, and refilling a gap would put today's records ahead of
+// records written days earlier.
 func NextSegmentPath(dataFolder string, date time.Time) (string, error) {
 	indexes, _ := daySegments(dataFolder, date)
-	used := make(map[int]bool, len(indexes))
-	for _, i := range indexes {
-		used[i] = true
+	next := 1
+	if len(indexes) > 0 {
+		next = indexes[len(indexes)-1] + 1
 	}
-	for index := 1; index <= maxSegmentIndex; index++ {
-		if !used[index] {
-			return segmentPath(dataFolder, date, index), nil
-		}
+	if next > maxSegmentIndex {
+		return "", fmt.Errorf("report segments for %s are past the highest index %d",
+			date.UTC().Format(consts.DateFormat), maxSegmentIndex)
 	}
-	return "", fmt.Errorf("all %d report segments for %s are in use",
-		maxSegmentIndex, date.UTC().Format(consts.DateFormat))
+	return segmentPath(dataFolder, date, next), nil
 }
 
 // HasDay reports whether any report segment exists for the UTC day of date. Callers use this

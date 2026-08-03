@@ -50,7 +50,9 @@ func statfsFreeBytes(path string) (uint64, error) {
 // would hide the one fact an operator needs.
 //
 // Nothing is logged when free space already meets the target — this runs hourly, and a line an
-// hour saying "nothing to do" is how the useful lines get lost.
+// hour saying "nothing to do" is how the useful lines get lost. That path also skips the
+// directory prune, deliberately: nothing was deleted, so nothing new can have been emptied, and
+// two walks of the tree an hour buy nothing.
 func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays int) error {
 	free, err := freeBytes(dataFolder)
 	if err != nil {
@@ -72,8 +74,13 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 
 	var deletedDays, deletedFiles int
 	var probeErr error
+	// Whether the loop ran out of deletable days because of the floor, as opposed to running
+	// out of days altogether. Only the first of those is retention holding data back, and the
+	// warning below must not claim the one that did not happen.
+	var stoppedAtFloor bool
 	for _, day := range days {
 		if !day.Before(floor) {
+			stoppedAtFloor = true
 			break
 		}
 		if n := removeDay(segments[day]); n > 0 {
@@ -93,17 +100,30 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 		}
 	}
 
+	// A failed probe leaves free holding the reading from before these deletions, so the one
+	// thing not reported here is a free-space figure: the honest answer is that it is unknown.
+	if probeErr != nil {
+		if deletedDays > 0 {
+			log.Printf("Purged %d report day(s), %d segment(s) before the free-space probe failed",
+				deletedDays, deletedFiles)
+		}
+		return probeErr
+	}
+
 	if deletedDays > 0 {
 		log.Printf("Purged %d report day(s), %d segment(s); %d MiB now free", deletedDays, deletedFiles, free>>20)
 	}
-	if probeErr != nil {
-		return probeErr
-	}
 	if free < minFreeBytes {
-		log.Printf("WARNING: %d MiB free, below the %d MiB target, and every report day left is "+
-			"within the %d-day minimum retention. Something other than reports is filling the "+
-			"volume; free space by hand before ingest starts rejecting reports.",
-			free>>20, minFreeBytes>>20, minRetentionDays)
+		// Both cases mean something other than reports is filling the volume, but only one of
+		// them has retention holding history back, and telling an operator to look at retention
+		// when there is nothing left to purge sends them the wrong way.
+		reason := "there are no report days left to delete"
+		if stoppedAtFloor {
+			reason = fmt.Sprintf("every report day left is within the %d-day minimum retention", minRetentionDays)
+		}
+		log.Printf("WARNING: %d MiB free, below the %d MiB target, and %s. Something other than "+
+			"reports is filling the volume; free space by hand before ingest starts rejecting reports.",
+			free>>20, minFreeBytes>>20, reason)
 	}
 
 	return pruneEmptyDirs(baseDir)

@@ -40,7 +40,7 @@ var _ = Describe("WriteFileAtomic", func() {
 	It("writes content that reads back", func() {
 		Expect(fsutil.WriteFileAtomic(path, []byte("hello"), 0600)).To(Succeed())
 
-		Expect(os.ReadFile(path)).To(Equal([]byte("hello")))
+		Expect(os.ReadFile(path)).To(Equal([]byte("hello"))) //#nosec G304 -- test-only path from the suite's TempDir
 	})
 
 	It("leaves no temporary file behind", func() {
@@ -73,7 +73,7 @@ var _ = Describe("WriteFileAtomic", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(os.SameFile(before, after)).To(BeFalse(),
 			"the name must point at a different, already complete file, not at the same one rewritten")
-		Expect(os.ReadFile(path)).To(Equal([]byte("new")))
+		Expect(os.ReadFile(path)).To(Equal([]byte("new"))) //#nosec G304 -- test-only path from the suite's TempDir
 	})
 
 	// A failed publish must cost nothing: the previous contents stay readable, and no debris is
@@ -87,6 +87,6 @@ var _ = Describe("WriteFileAtomic", func() {
 		Expect(fsutil.WriteFileAtomic(target, []byte("new"), 0600)).ToNot(Succeed())
 
 		Expect(entries()).To(ConsistOf("in-the-way"))
-		Expect(os.ReadFile(filepath.Join(target, "child"))).To(Equal([]byte("x")))
+		Expect(os.ReadFile(filepath.Join(target, "child"))).To(Equal([]byte("x"))) //#nosec G304 -- test-only path from the suite's TempDir
 	})
 })

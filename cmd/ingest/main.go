@@ -116,10 +116,18 @@ func run(ctx context.Context, ln net.Listener, h http.Handler) error {
 		Handler:           h,
 	}
 
+	// serveFailed lets a Serve error start the drain itself. Nothing else will: a listener that
+	// cannot be served — a port already in use, above all — leaves ctx uncancelled forever,
+	// because main only cancels it on a signal or on a fatal writer error. Waiting on a
+	// shutdown nobody triggered is how this path deadlocks.
+	serveFailed := make(chan struct{})
 	done := make(chan struct{})
 	go func() { //#nosec G118 -- the shutdown deadline must not derive from ctx: ctx is already cancelled here, so a derived context would expire immediately and abort the drain
 		defer close(done)
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-serveFailed:
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
@@ -134,7 +142,14 @@ func run(ctx context.Context, ln net.Listener, h http.Handler) error {
 		<-done
 		return nil
 	}
-	// On any other error the shutdown goroutine is released by the caller cancelling ctx
-	// (main's deferred stop).
+	// Serve failed for its own reasons — the accept loop broke, not the listener closing. The
+	// requests it accepted before that are still being served, and main closes the report
+	// writer the moment this returns, so returning now answers an already-accepted report 500
+	// and loses it. Same bounded drain as the clean path, started here because nothing else
+	// will start it.
+	close(serveFailed)
+	<-done
+	// The Serve failure, not the shutdown's: that is the one that explains why the process is
+	// stopping.
 	return err
 }

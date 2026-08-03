@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -180,6 +182,140 @@ func TestFatalWriterErrorStopsTheServer(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("run kept serving after the writer failed permanently: every report would be answered 500 until the process is killed by hand")
+	}
+}
+
+// breakingListener serves one connection and then breaks, which is how an unexpected Serve
+// error arrives while a request accepted a moment earlier is still being handled. The second
+// Accept blocks until the test says so, so the failure lands at a point it chooses rather than
+// at one the scheduler picks.
+type breakingListener struct {
+	net.Listener
+	accepts int
+	breakAt chan struct{}
+}
+
+func (l *breakingListener) Accept() (net.Conn, error) {
+	l.accepts++
+	if l.accepts == 1 {
+		return l.Listener.Accept()
+	}
+	<-l.breakAt
+	// Not a net.Error, so Serve does not treat it as temporary and retry: it gives up and
+	// returns it, exactly as it would for a broken accept loop.
+	return nil, errors.New("accept boom")
+}
+
+// TestRunDrainsInFlightRequestAfterServeError is the same guarantee as the test above, for the
+// path where Serve fails on its own rather than being shut down.
+//
+// The reports already accepted are still being served when that happens, and main closes the
+// report writer as soon as run returns — so returning straight away answers a report that was
+// accepted with a 500 and loses it. The assertion that matters is the last one: that the report
+// is on disk. A test that only checked that run returned the Serve error would pass against a
+// run that drained nothing.
+func TestRunDrainsInFlightRequestAfterServeError(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := store.NewWriter(dir)
+	if err != nil {
+		t.Fatalf("creating writer: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	router := newRouter(writer)
+	blocking := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		router.ServeHTTP(rw, r)
+	})
+
+	tcp, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	ln := &breakingListener{Listener: tcp, breakAt: make(chan struct{})}
+	defer func() { _ = ln.Close() }()
+
+	// Never cancelled: only Serve's own failure can release run here, as on the bind-failure
+	// path in production.
+	runErr := make(chan error, 1)
+	go func() { runErr <- run(context.Background(), ln, blocking) }()
+
+	var data insights.Data
+	data.InsightsID = "in-flight"
+	data.Version = "0.61.2"
+	body, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshalling payload: %v", err)
+	}
+
+	status := make(chan int, 1)
+	reqErr := make(chan error, 1)
+	go func() {
+		resp, err := http.Post("http://"+tcp.Addr().String()+"/collect", "application/json", bytes.NewReader(body))
+		if err != nil {
+			reqErr <- err
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		status <- resp.StatusCode
+	}()
+
+	select {
+	case <-entered:
+	case err := <-reqErr:
+		t.Fatalf("request failed before reaching the handler: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the request to reach the handler")
+	}
+
+	close(ln.breakAt) // the accept loop fails, with a report half-served
+
+	select {
+	case err := <-runErr:
+		t.Fatalf("run returned (err=%v) while a request was still in flight: main would close the writer mid-request", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case err := <-runErr:
+		if err == nil || !strings.Contains(err.Error(), "accept boom") {
+			t.Fatalf("got %v, want the Serve failure reported", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after the in-flight request finished")
+	}
+
+	select {
+	case code := <-status:
+		if code != http.StatusOK {
+			t.Fatalf("got status %d, want 200", code)
+		}
+	case err := <-reqErr:
+		t.Fatalf("request failed: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the response")
+	}
+
+	// main's next step, and the point of the drain: the accepted report is already written.
+	if err := writer.Close(); err != nil {
+		t.Fatalf("closing writer: %v", err)
+	}
+
+	seq, err := store.ReadDay(dir, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("reading day: %v", err)
+	}
+	var ids []string
+	for r := range seq {
+		ids = append(ids, r.Data.InsightsID)
+	}
+	if len(ids) != 1 || ids[0] != "in-flight" {
+		t.Fatalf("got %v, want [in-flight]: the report was accepted and must not be lost", ids)
 	}
 }
 

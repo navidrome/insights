@@ -58,6 +58,24 @@ var _ = Describe("Record", func() {
 			Expect(p).To(Equal(dayFile("reports-2026-08-03.002.ndjson.gz")))
 		})
 
+		// Gap-filling would break the one guarantee readers depend on: that segment order is
+		// chronological. Reusing index 002 after it was deleted by hand would place records
+		// written today before records written last week.
+		It("does not reuse an index left by a deleted segment", func() {
+			touch(dayFile("reports-2026-08-03.001.ndjson.gz"))
+			touch(dayFile("reports-2026-08-03.003.ndjson.gz"))
+			p, err := NextSegmentPath(dir, testDay)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(p).To(Equal(dayFile("reports-2026-08-03.004.ndjson.gz")))
+		})
+
+		It("fails once the highest index is in use, even with lower ones free", func() {
+			touch(dayFile("reports-2026-08-03.999.ndjson.gz"))
+			_, err := NextSegmentPath(dir, testDay)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("2026-08-03"))
+		})
+
 		It("is unaffected by segments of another day", func() {
 			touch(dayFile("reports-2026-08-04.001.ndjson.gz"))
 			p, err := NextSegmentPath(dir, testDay)
@@ -87,6 +105,18 @@ var _ = Describe("Record", func() {
 			touch(dayFile("reports-2026-08-03.001.ndjson"))
 			Expect(DaySegmentPaths(dir, testDay)).To(Equal([]string{
 				dayFile("reports-2026-08-03.001.ndjson"),
+			}))
+		})
+
+		// One path per index. Returning both forms of the same segment would make every
+		// reader yield that segment's records twice.
+		It("returns only the compressed form when a segment exists in both", func() {
+			touch(dayFile("reports-2026-08-03.001.ndjson"))
+			touch(dayFile("reports-2026-08-03.001.ndjson.gz"))
+			touch(dayFile("reports-2026-08-03.002.ndjson"))
+			Expect(DaySegmentPaths(dir, testDay)).To(Equal([]string{
+				dayFile("reports-2026-08-03.001.ndjson.gz"),
+				dayFile("reports-2026-08-03.002.ndjson"),
 			}))
 		})
 

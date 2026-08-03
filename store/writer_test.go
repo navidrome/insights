@@ -282,6 +282,34 @@ var _ = Describe("Writer", func() {
 			Expect(w.Err()).To(MatchError(first))
 		})
 
+		// A sync failure is writeback reporting an error for bytes the process already handed
+		// to the kernel: records believed durable may be gone, and the deflate stream they
+		// belong to keeps growing. Returned plain, it left the Writer healthy — green
+		// /healthz, 200s to reporters — while the segment tail silently rotted.
+		It("is reported through Fatal and Err when the file sync fails", func() {
+			prev := syncFile
+			syncFile = func(*os.File) error { return errors.New("fsync boom") }
+			DeferCleanup(func() { syncFile = prev })
+
+			w, err := NewWriter(dir)
+			Expect(err).ToNot(HaveOccurred())
+			defer func() { _ = w.Close() }()
+			Expect(w.Append(dataFor("a"), testDay)).To(Succeed())
+			Expect(w.Fatal()).ToNot(BeClosed())
+
+			flushErr := w.Flush()
+			Expect(flushErr).To(MatchError(ContainSubstring("fsync boom")))
+			Expect(w.Fatal()).To(BeClosed())
+			Expect(w.Err()).To(MatchError(flushErr))
+
+			// Kept, so a later sync that happens to succeed does not talk the process out of
+			// shutting down: nothing after the fact can tell a lost write from a durable one.
+			syncFile = prev
+			_ = w.Flush()
+			Expect(w.Err()).To(MatchError(flushErr))
+			Expect(w.Fatal()).To(BeClosed())
+		})
+
 		// Running out of segment indexes is unrecoverable in the same way: openFor asks for the
 		// same day on every later Append and gets the same refusal. Without the latch, ingest
 		// answers 500 to every report until UTC midnight with /healthz still green, so nothing

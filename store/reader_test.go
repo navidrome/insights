@@ -191,6 +191,36 @@ var _ = Describe("ReadDay", func() {
 		Expect(out).To(BeEmpty())
 	})
 
+	// A process killed between creating a segment and its first flush leaves a zero-byte
+	// file. It sits there for the whole retention window, and every summarization pass reads
+	// every day twice, so logging it is a hundred identical lines a day about nothing.
+	It("logs nothing for a zero-byte segment", func() {
+		writeDay(dir, testDay, "a")
+		Expect(os.WriteFile(segmentPath(dir, testDay, 2), nil, consts.FilePermissions)).To(Succeed())
+		writeDay(dir, testDay, "c")
+
+		out := captureLog(func() {
+			seq, err := ReadDay(dir, testDay)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(collectIDs(seq)).To(Equal([]string{"a", "c"}))
+		})
+		Expect(out).To(BeEmpty())
+	})
+
+	// The other half of that: a file with content that is not gzip is damage, and staying
+	// quiet about it would hide data loss.
+	It("logs a segment whose contents are not gzip at all", func() {
+		writeDay(dir, testDay, "a")
+		Expect(os.WriteFile(segmentPath(dir, testDay, 2), []byte("not gzip at all\n"), consts.FilePermissions)).To(Succeed())
+
+		out := captureLog(func() {
+			seq, err := ReadDay(dir, testDay)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(collectIDs(seq)).To(Equal([]string{"a"}))
+		})
+		Expect(out).To(ContainSubstring("no readable gzip data"))
+	})
+
 	It("skips a malformed line and keeps the rest", func() {
 		writeDay(dir, testDay, "a")
 		appendPlainLine(dir, testDay, "{not json")

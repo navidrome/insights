@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,10 +20,22 @@ import (
 // sharing the tree — the ingest lock file above all — does not match and is left alone.
 var reportFileRegex = regexp.MustCompile(`^reports-(\d{4}-\d{2}-\d{2})\.(\d{3})\.ndjson(\.gz)?$`)
 
+// purgingPrefix marks a segment a purge has committed to deleting. A file wearing it matches
+// neither reportFileRegex nor the reader's segment pattern, so it is invisible to HasDay, to
+// summarization and to this purge's own day enumeration: hiding a day's segments before
+// unlinking any of them is what keeps a failed deletion from leaving a day that is half on
+// disk and still summarizable.
+const purgingPrefix = ".purging-"
+
 // freeBytes reports the space available on the volume holding path. It is a package-level
 // variable so tests can drive the purge with simulated disk pressure: filling a real volume to
 // a threshold is neither deterministic nor safe on a developer machine.
 var freeBytes = statfsFreeBytes
+
+// removeFile unlinks one segment. It is a package-level variable for the same reason as
+// freeBytes: a file that cannot be unlinked while its siblings can is not something a test can
+// arrange portably, and the behaviour on exactly that failure is what removeDay exists for.
+var removeFile = os.Remove
 
 // statfsFreeBytes reads the free space of the volume containing path.
 //
@@ -72,9 +85,21 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 	}
 
 	baseDir := filepath.Join(dataFolder, consts.ReportsDir)
-	days, segments, err := reportDays(baseDir)
+	days, segments, abandoned, err := reportDays(baseDir)
 	if err != nil {
 		return err
+	}
+
+	// Segments an earlier purge hid but could not unlink. Nothing reads them, so retrying is
+	// the only thing left to do with them, and skipping the retry would leak their space for
+	// good on a store whose retention is driven by free space. A failure here is logged and
+	// not fatal: it is space that is already lost either way.
+	for _, path := range abandoned {
+		if err := removeFile(path); err != nil { //#nosec G122 -- path comes from a controlled directory walk under DATA_FOLDER
+			log.Printf("Error deleting segment %s abandoned by an earlier purge: %v", path, err) //#nosec G706 -- path comes from a controlled directory walk
+			continue
+		}
+		log.Printf("Deleted segment %s abandoned by an earlier purge", path) //#nosec G706 -- path comes from a controlled directory walk
 	}
 
 	// The oldest day kept regardless of pressure is minRetentionDays days back; the day before
@@ -82,7 +107,7 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 	floor := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -minRetentionDays)
 
 	var deletedDays, deletedFiles int
-	var probeErr error
+	var probeErr, removeErr error
 	// Whether the loop ran out of deletable days because of the floor, as opposed to running
 	// out of days altogether. Only the first of those is retention holding data back, and the
 	// warning below must not claim the one that did not happen.
@@ -92,9 +117,19 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 			stoppedAtFloor = true
 			break
 		}
-		if n := removeDay(segments[day]); n > 0 {
+		n, err := removeDay(segments[day])
+		if n > 0 {
 			deletedDays++
 			deletedFiles += n
+		}
+		if err != nil {
+			// Loud, and by name: whatever state that day ended in, an operator has to be able
+			// to find it. The purge stops here rather than moving on to the next day — the
+			// volume is refusing deletions, so the days after this one would fail the same way,
+			// and every one of them attempted is another day put in a state to explain.
+			log.Printf("WARNING: purging report day %s: %v", day.Format(consts.DateFormat), err)
+			removeErr = err
+			break
 		}
 		// Re-probe after every day: the point is to stop at the target, not to delete
 		// everything that is old enough.
@@ -107,6 +142,17 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 		if free >= minFreeBytes {
 			break
 		}
+	}
+
+	// A deletion that failed is reported, never worked around. The warning at the bottom of
+	// this function would otherwise reach an operator whose whole report tree is still on disk
+	// and tell them there are no report days left to delete.
+	if removeErr != nil {
+		if deletedDays > 0 {
+			log.Printf("Purged %d report day(s), %d segment(s) before the deletion failed",
+				deletedDays, deletedFiles)
+		}
+		return removeErr
 	}
 
 	// A failed probe leaves free holding the reading from before these deletions, so the one
@@ -141,8 +187,13 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 // reportDays groups every report segment under baseDir by its UTC day and returns the days in
 // chronological order, oldest first. A missing baseDir is not an error: it is a store that has
 // not collected anything yet.
-func reportDays(baseDir string) ([]time.Time, map[time.Time][]string, error) {
+//
+// It also returns the segments an earlier purge hid but failed to unlink. They are invisible to
+// every reader by design, which also means nothing else will ever notice they are still taking
+// up space.
+func reportDays(baseDir string) ([]time.Time, map[time.Time][]string, []string, error) {
 	segments := make(map[time.Time][]string)
+	var abandoned []string
 	err := filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error { //#nosec G703 -- baseDir is from controlled env var and constant
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -151,6 +202,14 @@ func reportDays(baseDir string) ([]time.Time, map[time.Time][]string, error) {
 			return err
 		}
 		if d.IsDir() {
+			return nil
+		}
+		// Only a name this package itself produced: a hidden segment is still a report file
+		// name underneath, so nothing else that happens to start with a dot is touched.
+		if rest, ok := strings.CutPrefix(d.Name(), purgingPrefix); ok {
+			if reportFileRegex.MatchString(rest) {
+				abandoned = append(abandoned, path)
+			}
 			return nil
 		}
 		matches := reportFileRegex.FindStringSubmatch(d.Name())
@@ -166,7 +225,7 @@ func reportDays(baseDir string) ([]time.Time, map[time.Time][]string, error) {
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	days := make([]time.Time, 0, len(segments))
@@ -174,22 +233,57 @@ func reportDays(baseDir string) ([]time.Time, map[time.Time][]string, error) {
 		days = append(days, day)
 	}
 	slices.SortFunc(days, func(a, b time.Time) int { return a.Compare(b) })
-	return days, segments, nil
+	return days, segments, abandoned, nil
 }
 
-// removeDay deletes every segment of one day and reports how many went away. A file that
-// cannot be removed is logged and skipped rather than aborting the purge: the run that gives
-// up on the first bad file is the run that lets the disk fill.
-func removeDay(paths []string) int {
-	var removed int
-	for _, path := range paths {
-		if err := os.Remove(path); err != nil { //#nosec G122 -- path comes from a controlled directory walk under DATA_FOLDER
-			log.Printf("Error deleting %s: %v", path, err) //#nosec G706 -- path comes from a controlled directory walk
-			continue
+// removeDay deletes every segment of one day and reports how many went away.
+//
+// It does it in two passes — rename every segment out of the readable name space, then unlink
+// them — because deleting them one at a time makes a failure halfway through leave a day that
+// is partly on disk and still reported by HasDay. A `process -once -days N` backfill pointed at
+// such a day rewrites its summary from the surviving reports and publishes the result: silent
+// corruption of the product output, not just of the raw store. Free-space retention keeps
+// months of days a backfill can be aimed at, so that is not a theoretical window.
+//
+// The two passes give the day one of two honest states instead:
+//   - a rename fails: nothing has been unlinked, the names already taken are put back, and the
+//     day is left exactly as it was — whole, visible, correctly summarizable.
+//   - an unlink fails: every segment is already hidden, so the day is gone as far as every
+//     reader is concerned, and the bytes left behind are picked up by a later purge.
+//
+// Either way the error is returned, and the caller stops the purge on it.
+func removeDay(paths []string) (int, error) {
+	hidden := make([]string, 0, len(paths))
+	for i, path := range paths {
+		h := filepath.Join(filepath.Dir(path), purgingPrefix+filepath.Base(path))
+		if err := os.Rename(path, h); err != nil {
+			unhide(hidden, paths[:i])
+			return 0, fmt.Errorf("hiding segment %s: %w (the day was left intact)", path, err)
 		}
-		removed++
+		hidden = append(hidden, h)
 	}
-	return removed
+
+	for i, path := range hidden {
+		if err := removeFile(path); err != nil { //#nosec G122 -- path comes from a controlled directory walk under DATA_FOLDER
+			return i, fmt.Errorf("deleting segment %s: %w (%d of %d segment(s) of the day are "+
+				"still on disk, hidden from summarization until a later purge deletes them)",
+				path, err, len(hidden)-i, len(hidden))
+		}
+	}
+	return len(hidden), nil
+}
+
+// unhide puts back the names removeDay renamed away, so an aborted deletion leaves the day
+// whole. A failure here is the one case that cannot be undone: it leaves the day partly
+// visible, which is exactly the state the two passes exist to prevent, so it is said out loud.
+func unhide(hidden, paths []string) {
+	for i, path := range hidden {
+		if err := os.Rename(path, paths[i]); err != nil {
+			log.Printf("WARNING: could not restore %s after an aborted purge: %v. That day is "+
+				"now partly hidden and will summarize from incomplete data if it is backfilled.",
+				paths[i], err) //#nosec G706 -- path comes from a controlled directory walk
+		}
+	}
 }
 
 // pruneEmptyDirs removes the empty directories under baseDir, deepest first. baseDir itself

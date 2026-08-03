@@ -2,6 +2,10 @@
 
 // Dev-only routes: the static web assets and the server-rendered charts page, which are served
 // straight from the chart data this worker writes. Production builds get the no-op in dev_stub.go.
+//
+// Deliberately not a package doc comment: dev.go sorts before main.go, so a doc comment here
+// would replace the command's description in `go doc` whenever the dev tag is set.
+
 package main
 
 import (

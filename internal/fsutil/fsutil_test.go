@@ -1,0 +1,92 @@
+package fsutil_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/navidrome/insights/internal/fsutil"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+func TestFsutil(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Fsutil Suite")
+}
+
+var _ = Describe("WriteFileAtomic", func() {
+	var dir string
+	var path string
+
+	BeforeEach(func() {
+		dir = GinkgoT().TempDir()
+		path = filepath.Join(dir, "charts.json")
+	})
+
+	// entries is what is left in the directory: the point of a temp-file write is that nothing
+	// but the target survives it.
+	entries := func() []string {
+		GinkgoHelper()
+		found, err := os.ReadDir(dir)
+		Expect(err).ToNot(HaveOccurred())
+		names := make([]string, 0, len(found))
+		for _, e := range found {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+
+	It("writes content that reads back", func() {
+		Expect(fsutil.WriteFileAtomic(path, []byte("hello"), 0600)).To(Succeed())
+
+		Expect(os.ReadFile(path)).To(Equal([]byte("hello")))
+	})
+
+	It("leaves no temporary file behind", func() {
+		Expect(fsutil.WriteFileAtomic(path, []byte("hello"), 0600)).To(Succeed())
+
+		Expect(entries()).To(ConsistOf("charts.json"))
+	})
+
+	// os.CreateTemp makes its file 0600 whatever the caller asks for, so the mode has to be set
+	// explicitly or every file published through here silently ends up owner-only.
+	It("uses the permissions it was given, not the temp file's", func() {
+		Expect(fsutil.WriteFileAtomic(path, []byte("hello"), 0644)).To(Succeed())
+
+		info, err := os.Stat(path)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0644)))
+	})
+
+	// The whole reason this exists. An O_TRUNC rewrite empties the file in place, so a reader
+	// holding that name sees zero bytes, then a prefix, then the whole thing; a rename swaps a
+	// finished file in, and readers see one or the other.
+	It("replaces the file by rename rather than truncating it in place", func() {
+		Expect(os.WriteFile(path, []byte("old"), 0600)).To(Succeed())
+		before, err := os.Stat(path)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(fsutil.WriteFileAtomic(path, []byte("new"), 0600)).To(Succeed())
+
+		after, err := os.Stat(path)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(os.SameFile(before, after)).To(BeFalse(),
+			"the name must point at a different, already complete file, not at the same one rewritten")
+		Expect(os.ReadFile(path)).To(Equal([]byte("new")))
+	})
+
+	// A failed publish must cost nothing: the previous contents stay readable, and no debris is
+	// left in a directory the readers walk. Renaming onto a directory is the failure that can be
+	// provoked portably; the cleanup path it exercises is the one every other failure takes.
+	It("leaves the original intact and no debris when the write fails", func() {
+		target := filepath.Join(dir, "in-the-way")
+		Expect(os.Mkdir(target, 0750)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(target, "child"), []byte("x"), 0600)).To(Succeed())
+
+		Expect(fsutil.WriteFileAtomic(target, []byte("new"), 0600)).ToNot(Succeed())
+
+		Expect(entries()).To(ConsistOf("in-the-way"))
+		Expect(os.ReadFile(filepath.Join(target, "child"))).To(Equal([]byte("x")))
+	})
+})

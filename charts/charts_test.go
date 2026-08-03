@@ -677,5 +677,40 @@ var _ = Describe("Charts", func() {
 			Expect(chartsData[4].(map[string]interface{})["id"]).To(Equal("tracks"))
 			Expect(chartsData[5].(map[string]interface{})["id"]).To(Equal("albumsArtists"))
 		})
+
+		// cmd/process serves this very file at /api/charts. A plain O_TRUNC rewrite empties it
+		// in place, so a request landing in the window gets a 200 with a truncated body — and a
+		// restart near 00:05 UTC can put two chart generations into that window at once. A
+		// rename swaps a finished file in: a reader gets the old charts or the new ones.
+		It("republishes charts.json by rename rather than truncating it in place", func() {
+			s := summary.Summary{
+				NumInstances: 100,
+				Versions:     map[string]uint64{"0.54.0": 100},
+				OS:           map[string]uint64{"Linux - amd64": 100},
+			}
+			for day := 1; day <= 3; day++ {
+				Expect(summary.SaveSummary(s, time.Date(2025, 1, day, 0, 0, 0, 0, time.UTC))).To(Succeed())
+			}
+			jsonPath := filepath.Join(outputDir, "charts.json")
+			Expect(ExportChartsJSON(outputDir)).To(Succeed())
+			before, err := os.Stat(jsonPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(ExportChartsJSON(outputDir)).To(Succeed())
+
+			after, err := os.Stat(jsonPath)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(os.SameFile(before, after)).To(BeFalse(),
+				"the served name must be pointed at a finished file, not at one being rewritten under it")
+
+			// And nothing else is left in the directory the web server publishes.
+			found, err := os.ReadDir(outputDir)
+			Expect(err).NotTo(HaveOccurred())
+			var names []string
+			for _, e := range found {
+				names = append(names, e.Name())
+			}
+			Expect(names).To(ConsistOf("charts.json"))
+		})
 	})
 })

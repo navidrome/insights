@@ -3,5 +3,13 @@
 }
 
 insights.navidrome.org {
-    reverse_proxy insights:8080
+    encode gzip
+
+    handle /api/charts* {
+        reverse_proxy process:8080
+    }
+
+    handle {
+        reverse_proxy ingest:8080
+    }
 }

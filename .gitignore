@@ -1,9 +1,13 @@
 .DS_Store
 insights.db*
-insights
+/insights
 /ingest
 /process
 /monitor
 .env
 tmp
 web/chartdata/*
+# Data written by `make dev` when DATA_FOLDER is unset (writes into the repo root).
+/reports/
+/summaries/
+/binary/

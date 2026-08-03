@@ -661,11 +661,11 @@ var _ = Describe("Charts", func() {
 			var output map[string]interface{}
 			err = json.Unmarshal(data, &output)
 			Expect(err).NotTo(HaveOccurred())
-			
+
 			// Verify metadata fields
 			Expect(output["totalInstances"]).To(BeEquivalentTo(100))
 			Expect(output["lastUpdated"]).NotTo(BeNil())
-			
+
 			// Verify charts array
 			chartsData := output["charts"].([]interface{})
 			Expect(chartsData).To(HaveLen(6))

@@ -5,21 +5,30 @@ Go service collecting anonymous usage metrics from Navidrome instances, generati
 ## Architecture
 
 ```
-cmd/server/       → HTTP server (main.go), /collect endpoint (handler.go), cron tasks (tasks.go)
-db/               → SQLite operations (openDB, saveReport, selectData, purgeOldEntries)
-summary/          → Aggregation logic (summary.go) and file storage (store.go)
-charts/           → Chart generation using go-echarts, exports to JSON
-cmd/consolidate/  → CLI tool to merge historical backup DBs into one
-web/              → Static frontend (index.html consumes chartdata/charts.json)
+cmd/ingest/           → HTTP server accepting reports: /collect (handler.go), /healthz
+cmd/process/          → Cron worker (tasks.go) + /api/charts, /healthz (handler.go)
+cmd/monitor/          → CLI reporting on one UTC day of collected reports
+cmd/regenerate-charts/→ CLI to rebuild charts.json from existing summaries
+store/                → Raw report storage: gzipped NDJSON segments (writer.go, reader.go,
+                        lastperid.go, purge.go)
+summary/              → Aggregation logic (summary.go) and file storage (store.go)
+charts/               → Chart generation using go-echarts, exports to JSON
+web/                  → Static frontend (index.html consumes chartdata/charts.json)
 ```
+
+The two binaries are deliberately separate: `ingest` only appends, so restarting the cron
+worker never interrupts collection. Both run from the same `DATA_FOLDER`.
 
 ### Data Flow
 
-1. Navidrome POSTs to `/collect` (rate-limited: 1 req/30min per IP) → stored in SQLite
-2. Cron every 2h: `summary.SummarizeData()` aggregates last 10 days → `summaries/YYYY/MM/summary-YYYY-MM-DD.json`
+1. Navidrome POSTs to `/collect` (rate-limited: 1 req/30min per IP) → `ingest` appends a JSON
+   line to `reports/YYYY/MM/reports-YYYY-MM-DD.NNN.ndjson.gz`
+2. Cron every 2h: `summary.SummarizeData()` aggregates the last 5 days →
+   `summaries/YYYY/MM/summary-YYYY-MM-DD.json`
 3. Cron daily 00:05 UTC: `charts.ExportChartsJSON()` → `web/chartdata/charts.json`
-4. Cron daily 00:30 UTC: `db.PurgeOldEntries()` removes entries >30 days old
-5. `/api/charts` serves `charts.json` (protected by `API_KEY` if set, public otherwise)
+4. Cron daily 00:30 UTC: `store.PurgeOldFiles()` deletes report files older than 15 days
+5. `/api/charts` (served by `process`) returns `charts.json` (protected by `API_KEY` if set,
+   public otherwise)
 
 ### External Dependency
 
@@ -28,18 +37,22 @@ web/              → Static frontend (index.html consumes chartdata/charts.json
 ## Development
 
 ```bash
-make dev                    # Docker Compose + hot reload (reflex)
+make dev                    # Docker Compose + hot reload (reflex), both binaries
 make lint                   # golangci-lint in container
-go test ./...               # Run Ginkgo tests locally
-DATA_FOLDER=tmp go run ./cmd/server/*.go  # Run server with custom data folder
+make test                   # go test ./...
+make summarize DATA=tmp [DAYS=5]        # Run summarize + chart export once, then exit
+make monitor DATA=tmp [DATE=YYYY-MM-DD] # Report on one UTC day of raw reports
+DATA_FOLDER=tmp go run ./cmd/ingest     # Run the collector with a custom data folder
 ```
+
+`make dev` runs `ingest` on `$PORT` (8080) and `process` on 8081.
 
 **Environment**: `PORT` (default `8080`), `DATA_FOLDER` (default current dir), `API_KEY` (optional, protects `/api/charts`)
 
 ### Build Tags
 
-- **Production** (`go build`): Only `/collect` and `/api/charts` endpoints available
-- **Development** (`go build -tags dev`): Adds `/`, `/chartdata/*`, `/charts` routes for static frontend and legacy server-rendered charts
+- **Production** (`go build`): `ingest` serves `/collect`; `process` serves `/api/charts`
+- **Development** (`go build -tags dev`): `process` also serves `/`, `/chartdata/*`, `/charts` for the static frontend and legacy server-rendered charts
 
 The `make dev` command automatically uses `-tags dev` via reflex.
 
@@ -62,7 +75,8 @@ Numeric values grouped into predefined bins: `var TrackBins = []int64{0, 1, 100,
 
 ### Iterator Pattern
 
-`db.SelectData()` returns `iter.Seq[insights.Data]` for memory-efficient processing.
+`store.ReadDay()` returns `iter.Seq[store.Record]` and `store.LastPerID()` returns
+`iter.Seq[insights.Data]` for memory-efficient processing — nothing loads a day into memory.
 
 ### Incomplete Data Detection (`charts.ExcludeIncompleteDays`)
 
@@ -80,20 +94,15 @@ Removes trailing days where instance count drops >20% (indicates incomplete coll
   ```
 - Use temp directories: `os.MkdirTemp()` + set `DATA_FOLDER` env var
 
-## Database
+## Storage
 
-SQLite with WAL mode. Schema auto-created in `db.OpenDB()`:
+No database — there is no SQLite and no cgo (`CGO_ENABLED=0 go build ./...` must stay clean,
+it is what lets the production image be `FROM scratch`).
 
-```sql
-insights(id VARCHAR, time DATETIME, data JSONB, PRIMARY KEY (id, time))
-```
+Raw reports live under `$DATA_FOLDER/reports/YYYY/MM/` as gzipped NDJSON, one line per report
+(`{"time":...,"data":{...}}`). Each writer session — process start, or a UTC day rollover
+within a session — opens a **new** segment `reports-YYYY-MM-DD.NNN.ndjson.gz`; a session never
+appends to a segment written by an earlier one, so an unclean shutdown only truncates the tail
+of the segment that was open. Readers tolerate that truncation and skip to the next segment.
 
-Summaries stored as JSON files in `summaries/`, not in SQLite.
-
-## Consolidation Tool
-
-Merge historical backup zip files into a single DB:
-
-```bash
-make consolidate BACKUPS=/path/to/zips DEST=/path/to/output
-```
+All day boundaries are UTC. Summaries stay as JSON files in `summaries/`.

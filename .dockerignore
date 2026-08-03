@@ -3,3 +3,9 @@ docker-compose.yml
 insights*
 tmp/
 tmp/**
+reports/
+reports/**
+summaries/
+summaries/**
+binary/
+binary/**

@@ -11,6 +11,7 @@ services:
       - .env
     ports:
       - "$PORT:$PORT"
+      - "8081:8081"
     environment:
       GOCACHE: /go-cache
       DATA_FOLDER: ${DATA_FOLDER}

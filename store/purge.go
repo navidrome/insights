@@ -53,7 +53,16 @@ func statfsFreeBytes(path string) (uint64, error) {
 // hour saying "nothing to do" is how the useful lines get lost. That path also skips the
 // directory prune, deliberately: nothing was deleted, so nothing new can have been emptied, and
 // two walks of the tree an hour buy nothing.
+//
+// An empty dataFolder is the documented "defaults to the current directory" case that ingest
+// and summarization both handle by letting filepath.Join drop it. statfs does not: it resolves
+// "" to ENOENT, which would make every hourly run fail on the probe and retention never run at
+// all. "." names the same directory the joins below resolve against.
 func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays int) error {
+	if dataFolder == "" {
+		dataFolder = "."
+	}
+
 	free, err := freeBytes(dataFolder)
 	if err != nil {
 		return err

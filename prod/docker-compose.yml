@@ -22,7 +22,9 @@ services:
     environment:
       - PORT=8080
       - DATA_FOLDER=/app
-      - API_KEY=${API_KEY}
+      # Fail closed: an unset API_KEY would interpolate to "" and cmd/process would serve
+      # /api/charts publicly. The :? guard makes `docker compose up` refuse to start instead.
+      - API_KEY=${API_KEY:?API_KEY must be set in .env next to this file}
     volumes:
       - .:/app
 

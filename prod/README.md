@@ -119,7 +119,7 @@ Both must pass. Run the first a few minutes after deploying.
 
 - **Retire the rotation cron.** Remove `rotate.sh` and its crontab entry: `process` manages
   retention on its own, hourly at :30. It deletes whole report days, oldest first, only when
-  free space on the data volume is below 2 GiB, and never touches a day younger than 7 days.
+  free space on the data volume is below 500 MiB, and never touches a day younger than 7 days.
   With ~18 MB per day on a 9.8 GB volume, that means months of history are kept rather than a
   fixed window — and if it ever logs `WARNING: ... minimum retention`, reports are not what is
   filling the disk and something needs looking at by hand.

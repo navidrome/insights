@@ -32,7 +32,7 @@ const (
 	// MinFreeBytes is the free space the purge tries to keep available on the volume holding
 	// the data folder. It is a floor on the whole volume, not a cap on what reports may use:
 	// what matters is that the box keeps working, whatever is consuming the disk.
-	MinFreeBytes = 2 << 30 // 2 GiB
+	MinFreeBytes = 500 << 20 // 500 MiB
 	// MinRetentionDays is the age below which a report day is never deleted, no matter how
 	// tight the disk is. It is a safety floor, not a target: with free space to spare the
 	// store keeps every day it has.

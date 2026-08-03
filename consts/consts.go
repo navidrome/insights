@@ -6,7 +6,12 @@ import "time"
 const (
 	DefaultPort       = "8080"
 	ReadHeaderTimeout = 3 * time.Second
-	RateLimitRequests = 1
+	// RateLimitRequests is per client IP, not per instance. Several instances can share one
+	// public IP behind NAT, and they report ~5 minutes after startup — so a host running two
+	// of them loses one report on every correlated restart if the allowance is 1. An instance
+	// reports about once a day, so this stays far above legitimate use while still capping a
+	// flood. The undercount it prevents is invisible in the data, since no IP is stored.
+	RateLimitRequests = 10
 	RateLimitWindow   = 30 * time.Minute
 )
 

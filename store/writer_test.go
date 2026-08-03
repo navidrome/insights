@@ -8,34 +8,58 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
-// readAllLines decompresses a day file and returns its lines.
-//
-// io.ErrUnexpectedEOF is tolerated: a flushed-but-not-closed gzip member has no trailer yet,
-// so reading a file a live writer still holds open ends that way. Everything decoded before
-// the error is intact, which is what the reader in Task 3 has to rely on too.
+// readAllLines returns the lines of every segment of a UTC day, in segment order. Every
+// segment must decode cleanly, trailer included, so a writer that stops terminating its
+// gzip member is caught here rather than silently tolerated.
 func readAllLines(dataFolder string, date time.Time) []string {
 	GinkgoHelper()
-	f, err := os.Open(DayFilePath(dataFolder, date))
-	Expect(err).ToNot(HaveOccurred())
-	defer func() { _ = f.Close() }()
-	gz, err := gzip.NewReader(f)
-	Expect(err).ToNot(HaveOccurred())
-	defer func() { _ = gz.Close() }()
-	b, err := io.ReadAll(gz)
-	if !errors.Is(err, io.ErrUnexpectedEOF) {
+	return readSegments(dataFolder, date, false)
+}
+
+// readAllLinesLive is readAllLines for a day a writer still holds open. It tolerates
+// io.ErrUnexpectedEOF, which is how a flushed-but-unterminated member ends: the trailer is
+// only written on Close. Everything decoded before that point is intact, which is what the
+// reader in Task 3 relies on for both live reads and crash-truncated segments.
+func readAllLinesLive(dataFolder string, date time.Time) []string {
+	GinkgoHelper()
+	return readSegments(dataFolder, date, true)
+}
+
+func readSegments(dataFolder string, date time.Time, tolerateOpenMember bool) []string {
+	GinkgoHelper()
+
+	// An unterminated member reports io.ErrUnexpectedEOF from both ReadAll and Close.
+	check := func(err error, path string) {
+		GinkgoHelper()
+		if tolerateOpenMember && errors.Is(err, io.ErrUnexpectedEOF) {
+			return
+		}
+		Expect(err).ToNot(HaveOccurred(), "decoding %s", path)
+	}
+
+	var lines []string
+	for _, path := range DaySegmentPaths(dataFolder, date) {
+		f, err := os.Open(path) //#nosec G304 -- test-only path from the suite's TempDir
 		Expect(err).ToNot(HaveOccurred())
+		gz, err := gzip.NewReader(f)
+		Expect(err).ToNot(HaveOccurred())
+		b, readErr := io.ReadAll(gz)
+		check(readErr, path)
+		check(gz.Close(), path)
+		Expect(f.Close()).To(Succeed())
+
+		if s := strings.TrimSuffix(string(b), "\n"); s != "" {
+			lines = append(lines, strings.Split(s, "\n")...)
+		}
 	}
-	s := strings.TrimSuffix(string(b), "\n")
-	if s == "" {
-		return nil
-	}
-	return strings.Split(s, "\n")
+	return lines
 }
 
 var _ = Describe("Writer", func() {
@@ -69,7 +93,7 @@ var _ = Describe("Writer", func() {
 		Expect(readAllLines(dir, testDay.AddDate(0, 0, 1))).To(HaveLen(1))
 	})
 
-	It("appends a new gzip member after reopening the same day", func() {
+	It("writes a separate segment per writer session", func() {
 		w1, err := NewWriter(dir)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(w1.Append(dataFor("a"), testDay)).To(Succeed())
@@ -80,10 +104,32 @@ var _ = Describe("Writer", func() {
 		Expect(w2.Append(dataFor("b"), testDay)).To(Succeed())
 		Expect(w2.Close()).To(Succeed())
 
+		Expect(DaySegmentPaths(dir, testDay)).To(HaveLen(2))
 		lines := readAllLines(dir, testDay)
 		Expect(lines).To(HaveLen(2))
 		Expect(lines[0]).To(ContainSubstring(`"id":"a"`))
 		Expect(lines[1]).To(ContainSubstring(`"id":"b"`))
+	})
+
+	// The reason segments exist. A killed process leaves its member unterminated; appending
+	// to that file would put a gzip header inside an open flate stream, and gzip.Reader then
+	// fails with "flate: corrupt input" for everything written after the restart.
+	It("keeps a crashed session's damage inside its own segment", func() {
+		w1, err := NewWriter(dir)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(w1.Append(dataFor("before"), testDay)).To(Succeed())
+		crash(w1)
+
+		w2, err := NewWriter(dir)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(w2.Append(dataFor("after"), testDay)).To(Succeed())
+		Expect(w2.Close()).To(Succeed())
+
+		Expect(DaySegmentPaths(dir, testDay)).To(HaveLen(2))
+		lines := readAllLinesLive(dir, testDay)
+		Expect(lines).To(HaveLen(2))
+		Expect(lines[0]).To(ContainSubstring(`"id":"before"`))
+		Expect(lines[1]).To(ContainSubstring(`"id":"after"`))
 	})
 
 	It("makes records readable after Flush, before Close", func() {
@@ -92,7 +138,7 @@ var _ = Describe("Writer", func() {
 		defer func() { _ = w.Close() }()
 		Expect(w.Append(dataFor("a"), testDay)).To(Succeed())
 		Expect(w.Flush()).To(Succeed())
-		Expect(readAllLines(dir, testDay)).To(HaveLen(1))
+		Expect(readAllLinesLive(dir, testDay)).To(HaveLen(1))
 	})
 
 	It("serializes concurrent appends", func() {
@@ -141,4 +187,43 @@ var _ = Describe("Writer", func() {
 		Expect(w.Close()).To(Succeed())
 		Expect(w.Close()).To(Succeed())
 	})
+
+	// A handler racing SIGTERM must not resurrect a closed writer: that would hold a segment
+	// open with no lock and no flush loop, and creating an empty segment would make HasDay
+	// report a day that has no data.
+	It("refuses Append after Close and creates no file", func() {
+		w, err := NewWriter(dir)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(w.Close()).To(Succeed())
+
+		Expect(w.Append(dataFor("a"), testDay)).To(MatchError(os.ErrClosed))
+		Expect(DaySegmentPaths(dir, testDay)).To(BeEmpty())
+		Expect(HasDay(dir, testDay)).To(BeFalse())
+	})
+
+	It("refuses Flush after Close", func() {
+		w, err := NewWriter(dir)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(w.Append(dataFor("a"), testDay)).To(Succeed())
+		Expect(w.Close()).To(Succeed())
+
+		Expect(w.Flush()).To(MatchError(os.ErrClosed))
+	})
 })
+
+// crash simulates an unclean shutdown: the flush loop stops and the lock is released, but the
+// gzip member is never terminated, exactly as if the process had been killed after a flush.
+func crash(w *Writer) {
+	GinkgoHelper()
+	Expect(w.Flush()).To(Succeed())
+	close(w.stop)
+	w.wg.Wait()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	Expect(w.lock).ToNot(BeNil())
+	Expect(syscall.Flock(int(w.lock.Fd()), syscall.LOCK_UN)).To(Succeed())
+	Expect(w.lock.Close()).To(Succeed())
+	w.lock = nil
+	// w.gz and w.file are deliberately left open and unterminated.
+}

@@ -1,7 +1,6 @@
 package summary
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"math"
@@ -11,7 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/navidrome/insights/db"
+	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/store"
 	"github.com/navidrome/navidrome/core/metrics/insights"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -55,10 +55,18 @@ type Summary struct {
 	ActiveUserStats  *Stats            `json:"activeUserStats,omitempty"`
 }
 
-func SummarizeData(dbConn *sql.DB, date time.Time) error {
-	rows, err := db.SelectData(dbConn, date)
+func SummarizeData(dataFolder string, date time.Time) error {
+	// A missing report file means the day was never recorded, which is not the same as a day
+	// with no instances. Writing a zero-instance summary here would blank the day in the
+	// charts, because GetSummaries skips zero-instance files.
+	if !store.HasDay(dataFolder, date) {
+		log.Printf("No report file for %s, skipping", date.Format(consts.DateFormat))
+		return nil
+	}
+
+	rows, err := store.LastPerID(dataFolder, date)
 	if err != nil {
-		log.Printf("Error selecting data: %s", err)
+		log.Printf("Error reading reports: %s", err)
 		return err
 	}
 	summary := Summary{

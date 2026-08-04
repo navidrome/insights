@@ -36,6 +36,10 @@ var syncFile = (*os.File).Sync
 // gone, and openFor keeps the broken stream because the day has not changed. That state is
 // unrecoverable from inside the Writer, so it is reported through Fatal and Err instead of
 // being retried silently. The caller is expected to shut the process down; see cmd/ingest.
+//
+// Failing to create a segment is different in kind: nothing is open yet, so the next Append
+// retries from scratch and a blip heals itself. It only becomes the same failure when it keeps
+// happening — see segmentCreateGrace.
 type Writer struct {
 	mu       sync.Mutex
 	folder   string
@@ -45,6 +49,10 @@ type Writer struct {
 	day      string // UTC date of the open segment, consts.DateFormat
 	closed   bool
 	fatalErr error
+
+	// createFailedAt is when the current unbroken run of segment-creation failures started,
+	// zero while creation is working. Guarded by mu, like everything else here.
+	createFailedAt time.Time
 
 	fatal     chan struct{}
 	stop      chan struct{}
@@ -139,6 +147,40 @@ func (w *Writer) Err() error {
 	return w.fatalErr
 }
 
+// segmentCreateGrace is how long segment creation may keep failing before the Writer treats
+// the failure as permanent and latches it.
+//
+// Creation is attempted again on every Append, so an ENOSPC that the purge relieves, or a
+// one-off EIO, heals by itself and must not kill a healthy process — that is why the first
+// failure is never the verdict. But when the cause does not go away (a read-only filesystem, a
+// volume that stays full, a broken device) every report is answered 500 for the rest of the
+// process's life while Fatal stays open, watchWriter never stops ingest and /healthz stays
+// green: the silent outage already fixed for the gzip stream, the sync error and index
+// exhaustion.
+//
+// 30 seconds, matching FlushInterval — the same order as the durability window this Writer
+// already accepts. At production's ~1.6 reports/second it means roughly 48 consecutive reports
+// refused before the process gives up, which is a real outage rather than a blip, and it still
+// cannot fire on a single failure however busy the box is. Unlike index exhaustion, the
+// crash-loop this produces costs nothing: a failed creation consumes no segment index, so
+// restarting does not walk the day towards the 999 limit.
+const segmentCreateGrace = 30 * time.Second
+
+// creationFailed records a failure to create a segment and latches it once the failures have
+// been going on for longer than segmentCreateGrace. It returns err either way, so the caller's
+// Append still fails; the latch only decides whether the process should stop. Callers must
+// hold w.mu.
+func (w *Writer) creationFailed(err error) error {
+	if w.createFailedAt.IsZero() {
+		w.createFailedAt = time.Now()
+		return err
+	}
+	if time.Since(w.createFailedAt) < segmentCreateGrace {
+		return err
+	}
+	return w.fail(err)
+}
+
 // openFor ensures a segment for t's UTC day is open, rolling over to a new segment if the
 // day changed. Callers must hold w.mu.
 func (w *Writer) openFor(t time.Time) error {
@@ -166,15 +208,17 @@ func (w *Writer) openFor(t time.Time) error {
 		return w.fail(err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), consts.DirPermissions); err != nil {
-		return fmt.Errorf("creating day dir: %w", err)
+		return w.creationFailed(fmt.Errorf("creating day dir: %w", err))
 	}
 	// O_EXCL: NextSegmentPath picked an unused index, so an existing file here means another
 	// process is writing this day. Truncating or appending to it would corrupt both streams.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, consts.FilePermissions) //#nosec G304 -- path built from controlled env var and constants
 	if err != nil {
-		return fmt.Errorf("creating %s: %w", path, err)
+		return w.creationFailed(fmt.Errorf("creating %s: %w", path, err))
 	}
 
+	// Creation works again, so whatever failed before was a blip: the run starts over.
+	w.createFailedAt = time.Time{}
 	w.file = f
 	w.gz = gzip.NewWriter(f)
 	w.day = day

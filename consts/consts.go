@@ -6,6 +6,13 @@ import "time"
 const (
 	DefaultPort       = "8080"
 	ReadHeaderTimeout = 3 * time.Second
+	// ReadTimeout bounds the whole request, headers and body together. Without it a client
+	// that dribbles its body out a byte at a time holds a handler open indefinitely, and
+	// ingest's shutdown waits for its handlers before closing the report writer — so a single
+	// slow-loris connection could stall the drain past its deadline. Reports average ~1.6KB,
+	// so this is orders of magnitude more than any honest client needs, and it stays under
+	// the shutdown deadline the drain is measured against.
+	ReadTimeout = 5 * time.Second
 	// RateLimitRequests is per client IP, not per instance. Several instances can share one
 	// public IP behind NAT, and they report ~5 minutes after startup — so a host running two
 	// of them loses one report on every correlated restart if the allowance is 1. An instance

@@ -88,10 +88,12 @@ func checkDays(days int) error {
 //
 // It applies to the scheduled mode only. There the summarize job runs continuously alongside
 // the hourly purge, so a lookback reaching past the floor means the purge can delete a day out
-// from under the window that is still being re-read. A -once run has no such interaction: it
-// reads what is on disk, skips any day the purge already took (summary guards on store.HasDay,
-// and whole days are deleted, so a taken day is skipped rather than rewritten from part of
-// itself) and then exits. Bounding -once as well would cost the backfill outright — retention
+// from under the window that is still being re-read. A -once run does meet the purge — a
+// backfill reaching months back can land on the very day the hourly purge is deleting — but
+// SummarizeData is what handles that, not this bound: it captures the day's segment paths
+// before reading them and refuses to save if any of them disappeared underneath, so a day the
+// purge took is skipped rather than rewritten from whatever part of it was still readable.
+// Bounding -once as well would cost the backfill outright — retention
 // is driven by free space now, so the store routinely holds months of days that reaching back
 // into is the entire point of the flag.
 func checkScheduledDays(days int) error {

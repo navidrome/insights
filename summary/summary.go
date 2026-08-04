@@ -174,6 +174,13 @@ func SummarizeData(dataFolder string, date time.Time) error {
 	// ordinary — ingest opens a new segment on every restart, and today's day gains segments as
 	// a matter of course. Treating any change as unsafe would stop the current day from ever
 	// being summarized.
+	//
+	// This narrows the window rather than closing it: a purge that starts between this check and
+	// SaveSummary still writes the partial summary. That gap is microseconds against the seconds
+	// or minutes the read above takes, and closing it properly needs a lock the purge and the
+	// backfill both take — cross-process, since they are different containers. Worth doing only
+	// if this ever fires in production, which would mean the two are colliding often enough for
+	// the remaining window to matter too.
 	if gone := missingSegments(before, segmentPathsFor(dataFolder, date)); len(gone) > 0 {
 		log.Printf("Skipping the summary for %s: %d of its %d report segment(s) were deleted while "+
 			"it was being summarized (first: %s), so the numbers are partial and would overwrite a "+

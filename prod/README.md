@@ -8,6 +8,12 @@ Three services: `ingest` (accepts `/collect`, appends report segments and nothin
 `process` (cron summarize/charts/purge, serves `/api/charts`), and `caddy` (TLS, routes
 `/api/charts*` to `process` and everything else to `ingest`).
 
+`ingest` sets `stop_grace_period: 20s`. It needs it: on SIGTERM it gives in-flight reports 10
+seconds to finish, allows up to 5 more for any handler the shutdown deadline gave up on, and
+only then closes the report writer. Docker's default grace is 10 seconds, so without this it
+would be SIGKILLed mid-drain and the open segment would lose its gzip trailer and its buffered
+tail. Keep the two in step: raising the timeouts in `cmd/ingest` means raising this too.
+
 ## Cutover checklist
 
 Do these in order. Steps 1 and 2 must happen **before** the new compose file lands.

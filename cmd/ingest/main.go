@@ -184,6 +184,24 @@ func (c *inflight) wait(timeout time.Duration) bool {
 	}
 }
 
+// newServer builds the ingest server. It is a function of its own so the timeouts can be
+// asserted directly: one of them is only correct because it is set, and a spec that went
+// through run would have to infer it from behaviour that takes minutes to show.
+func newServer(h http.Handler) *http.Server {
+	return &http.Server{
+		ReadHeaderTimeout: consts.ReadHeaderTimeout,
+		// Without a whole-request deadline a client that uploads its body one byte at a time
+		// keeps a handler running for as long as it likes, which is the easiest way to push a
+		// request past the shutdown deadline in run.
+		ReadTimeout: consts.ReadTimeout,
+		// Never left to net/http's fallback, which would make this ReadTimeout: 5 seconds of
+		// idle before ingest closes a pooled keep-alive under Caddy, and a close that races a
+		// dispatched POST loses that report outright. See consts.IdleTimeout.
+		IdleTimeout: consts.IdleTimeout,
+		Handler:     h,
+	}
+}
+
 // run serves ln until ctx is cancelled, then drains the requests already in flight, returning
 // only once that drain has finished.
 //
@@ -192,14 +210,7 @@ func (c *inflight) wait(timeout time.Duration) bool {
 // would answer 500 and drop a report that had already been accepted.
 func run(ctx context.Context, ln net.Listener, h http.Handler) error {
 	var live inflight
-	server := &http.Server{
-		ReadHeaderTimeout: consts.ReadHeaderTimeout,
-		// Without a whole-request deadline a client that uploads its body one byte at a time
-		// keeps a handler running for as long as it likes, which is the easiest way to push a
-		// request past the shutdown deadline below.
-		ReadTimeout: consts.ReadTimeout,
-		Handler:     live.track(h),
-	}
+	server := newServer(live.track(h))
 
 	// serveFailed lets a Serve error start the drain itself. Nothing else will: a listener that
 	// cannot be served — a port already in use, above all — leaves ctx uncancelled forever,

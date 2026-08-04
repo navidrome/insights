@@ -13,6 +13,19 @@ const (
 	// so this is orders of magnitude more than any honest client needs, and it stays under
 	// the shutdown deadline the drain is measured against.
 	ReadTimeout = 5 * time.Second
+	// IdleTimeout must be set explicitly whenever ReadTimeout is. net/http's idleTimeout()
+	// falls back to ReadTimeout when IdleTimeout is zero, so setting only ReadTimeout also
+	// retires pooled keep-alive connections after 5s idle — and Caddy reverse-proxies to
+	// ingest over a connection pool. A server-initiated close that lands while the proxy is
+	// dispatching a POST is a lost report, not a retry: Go's transport does not replay a
+	// request with a body (isReplayable is false), so the reporter gets a 502 and the report
+	// is gone.
+	//
+	// The value is above Caddy's 2-minute default keep-alive so the proxy is the side that
+	// retires an idle connection. A close the client initiates has no such race: the
+	// transport takes the connection out of its pool before closing it. Anything shorter
+	// only narrows the window instead of closing it.
+	IdleTimeout = 150 * time.Second
 	// RateLimitRequests is per client IP, not per instance. Several instances can share one
 	// public IP behind NAT, and they report ~5 minutes after startup — so a host running two
 	// of them loses one report on every correlated restart if the allowance is 1. An instance

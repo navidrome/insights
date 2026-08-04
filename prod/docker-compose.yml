@@ -4,6 +4,11 @@ services:
     command: ["/ingest"]
     restart: unless-stopped
     user: "1000:1000"
+    # Longer than the shutdown budget: ingest gives in-flight reports 10s to finish, then up to
+    # 5s more for any handler the shutdown deadline gave up on, and only then closes the report
+    # writer. Docker's default grace is 10s, which would SIGKILL partway through that — the gzip
+    # member of the open segment never gets its trailer and the buffered tail is lost.
+    stop_grace_period: 20s
     expose:
       - "8080"
     environment:

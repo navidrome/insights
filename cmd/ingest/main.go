@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,7 +22,19 @@ import (
 )
 
 // shutdownTimeout bounds how long in-flight reports have to finish once a signal arrives.
-const shutdownTimeout = 10 * time.Second
+//
+// handlerDrainTimeout bounds the wait that follows it. Shutdown returning a deadline error does
+// not stop the handlers it gave up on, so the connections are force-closed and the handlers are
+// given this much longer to unwind before the report writer is closed anyway. It is short
+// because a handler whose connection is gone has nothing left to wait for; the only reason it
+// is bounded at all is that a process that never exits is worse than one accepted report lost.
+//
+// Both are variables, not constants, so the specs can drive the deadline path without spending
+// ten real seconds per run.
+var (
+	shutdownTimeout     = 10 * time.Second
+	handlerDrainTimeout = 5 * time.Second
+)
 
 func main() {
 	dataFolder := os.Getenv("DATA_FOLDER")
@@ -104,6 +117,73 @@ func newRouter(writer *store.Writer) http.Handler {
 	return r
 }
 
+// inflight counts the handlers that are running right now. main closes the report writer as
+// soon as run returns and Append fails with os.ErrClosed after that, so the invariant run has
+// to hold up is: the writer is not closed while a handler can still call Append.
+//
+// http.Server.Shutdown almost gives that for free, but not quite — it returns as soon as its
+// context expires and leaves the handlers it gave up on running. This count is what run waits
+// on afterwards.
+type inflight struct {
+	mu   sync.Mutex
+	n    int
+	zero chan struct{} // non-nil only while wait is watching, closed when n reaches 0
+}
+
+// track wraps h so every request is counted for as long as its handler runs. It counts /healthz
+// as well as /collect: the probe never touches the writer, but it finishes in microseconds, and
+// a counter that has to know which route it is on is a counter that stops covering a route
+// somebody adds later.
+func (c *inflight) track(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		c.enter()
+		defer c.leave()
+		h.ServeHTTP(rw, r)
+	})
+}
+
+func (c *inflight) enter() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+}
+
+func (c *inflight) leave() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n--
+	if c.n == 0 && c.zero != nil {
+		close(c.zero)
+		c.zero = nil
+	}
+}
+
+// wait blocks until no handler is running or timeout expires, and reports which of the two
+// happened. A sync.WaitGroup would be the obvious tool and is the wrong one here: it cannot be
+// waited on with a deadline, and Add racing Wait is exactly the shape of a request accepted a
+// moment before Shutdown closed the listener.
+func (c *inflight) wait(timeout time.Duration) bool {
+	c.mu.Lock()
+	if c.n == 0 {
+		c.mu.Unlock()
+		return true
+	}
+	if c.zero == nil {
+		c.zero = make(chan struct{})
+	}
+	zero := c.zero
+	c.mu.Unlock()
+
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-zero:
+		return true
+	case <-t.C:
+		return false
+	}
+}
+
 // run serves ln until ctx is cancelled, then drains the requests already in flight, returning
 // only once that drain has finished.
 //
@@ -111,9 +191,14 @@ func newRouter(writer *store.Writer) http.Handler {
 // with os.ErrClosed once Close has run, so a handler still mid-request when the writer closed
 // would answer 500 and drop a report that had already been accepted.
 func run(ctx context.Context, ln net.Listener, h http.Handler) error {
+	var live inflight
 	server := &http.Server{
 		ReadHeaderTimeout: consts.ReadHeaderTimeout,
-		Handler:           h,
+		// Without a whole-request deadline a client that uploads its body one byte at a time
+		// keeps a handler running for as long as it likes, which is the easiest way to push a
+		// request past the shutdown deadline below.
+		ReadTimeout: consts.ReadTimeout,
+		Handler:     live.track(h),
 	}
 
 	// serveFailed lets a Serve error start the drain itself. Nothing else will: a listener that
@@ -131,7 +216,21 @@ func run(ctx context.Context, ln net.Listener, h http.Handler) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("Error shutting down server: %s", err)
+			// Shutdown gave up on a request that outlived the deadline. It returns the error
+			// and leaves that connection open with its handler still running, so waiting on
+			// the handler alone could wait forever. Close the connections instead: the handler
+			// loses its client and unwinds, and it is the unwinding that this path needs, not
+			// the response.
+			log.Printf("Error shutting down server, closing connections: %s", err)
+			_ = server.Close()
+		}
+		// Only now is the writer safe to close. Shutdown returning does not mean the handlers
+		// have finished — on the deadline path it means the opposite — and a handler that
+		// reaches Append after Close gets os.ErrClosed and loses a report the client was never
+		// told to resend.
+		if !live.wait(handlerDrainTimeout) {
+			log.Printf("Report handlers still running %s after the shutdown deadline; closing the "+
+				"report writer anyway, so an in-flight report may be lost", handlerDrainTimeout)
 		}
 	}()
 

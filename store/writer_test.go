@@ -343,6 +343,82 @@ var _ = Describe("Writer", func() {
 			Expect(w.Err()).To(MatchError(appendErr))
 		})
 
+		// Creating a segment fails on the first report after startup and after every UTC
+		// rollover. A persistent ENOSPC, EIO or read-only filesystem there means every report
+		// is answered 500 forever with Fatal still open and /healthz still green — the silent
+		// outage. A single blip must not do the same, because the next Append retries from
+		// scratch and heals.
+		Describe("a segment that cannot be created", func() {
+			// blockDay puts a regular file where a month directory has to go, so MkdirAll
+			// fails with ENOTDIR. Portable, and it needs no privileges to set up or undo —
+			// unlike a read-only directory, which a test running as root ignores.
+			blockDay := func(date time.Time) {
+				GinkgoHelper()
+				monthDir := dayDir(dir, date)
+				Expect(os.MkdirAll(filepath.Dir(monthDir), 0750)).To(Succeed())
+				Expect(os.WriteFile(monthDir, []byte{}, 0600)).To(Succeed())
+			}
+			unblockDay := func(date time.Time) {
+				GinkgoHelper()
+				Expect(os.Remove(dayDir(dir, date))).To(Succeed())
+			}
+			// age backdates the current run of failures, which is how a spec reaches the far
+			// side of segmentCreateGrace without sleeping through it.
+			age := func(w *Writer, d time.Duration) {
+				GinkgoHelper()
+				w.mu.Lock()
+				defer w.mu.Unlock()
+				Expect(w.createFailedAt).ToNot(BeZero(), "no failure run to age")
+				w.createFailedAt = w.createFailedAt.Add(-d)
+			}
+
+			It("is reported through Fatal and Err once it has lasted past the grace window", func() {
+				blockDay(testDay)
+
+				w, err := NewWriter(dir)
+				Expect(err).ToNot(HaveOccurred())
+				defer func() { _ = w.Close() }()
+
+				Expect(w.Append(dataFor("a"), testDay)).To(MatchError(ContainSubstring("creating day dir")))
+				Expect(w.Fatal()).ToNot(BeClosed(), "one failure is a blip, not a verdict")
+				Expect(w.Err()).ToNot(HaveOccurred())
+
+				age(w, 2*segmentCreateGrace)
+
+				appendErr := w.Append(dataFor("b"), testDay)
+				Expect(appendErr).To(HaveOccurred())
+				Expect(w.Fatal()).To(BeClosed())
+				Expect(w.Err()).To(MatchError(appendErr))
+			})
+
+			// The other half: a failure that goes away leaves nothing behind, so a later,
+			// unrelated one is judged on its own age and not on the old run's.
+			It("does not latch when a failure is followed by a success", func() {
+				blockDay(testDay)
+
+				w, err := NewWriter(dir)
+				Expect(err).ToNot(HaveOccurred())
+				defer func() { _ = w.Close() }()
+
+				Expect(w.Append(dataFor("a"), testDay)).ToNot(Succeed())
+				Expect(w.Fatal()).ToNot(BeClosed())
+				// Old enough to latch, so only the success below can stop it from doing so.
+				age(w, 2*segmentCreateGrace)
+
+				unblockDay(testDay)
+				Expect(w.Append(dataFor("b"), testDay)).To(Succeed())
+				Expect(w.Fatal()).ToNot(BeClosed())
+
+				// A fresh failure on the next rollover: it starts its own run, so it is a
+				// blip again rather than the tail of one that ended minutes ago.
+				nextMonth := testDay.AddDate(0, 1, 0)
+				blockDay(nextMonth)
+				Expect(w.Append(dataFor("c"), nextMonth)).ToNot(Succeed())
+				Expect(w.Fatal()).ToNot(BeClosed())
+				Expect(w.Err()).ToNot(HaveOccurred())
+			})
+		})
+
 		It("reports nothing while the writer is healthy", func() {
 			w, err := NewWriter(dir)
 			Expect(err).ToNot(HaveOccurred())

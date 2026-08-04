@@ -321,6 +321,37 @@ func TestRunForceClosesConnectionsOnTheShutdownDeadline(t *testing.T) {
 	}
 }
 
+// TestServerSetsAnIdleTimeoutOfItsOwn pins the one timeout whose default is a trap.
+//
+// net/http's (*Server).idleTimeout() returns ReadTimeout when IdleTimeout is zero, so setting a
+// 5-second ReadTimeout also silently retires pooled keep-alive connections after 5 seconds of
+// idle. Caddy reverse-proxies to ingest over a connection pool, and Go's transport will not
+// replay a POST with a body when the server closes a pooled connection mid-dispatch — so every
+// one of those races is a 502 and a report lost, which is the failure this whole branch exists
+// to remove. Leaving IdleTimeout unset would be that bug, silently.
+func TestServerSetsAnIdleTimeoutOfItsOwn(t *testing.T) {
+	srv := newServer(http.NotFoundHandler())
+
+	if srv.IdleTimeout != consts.IdleTimeout {
+		t.Fatalf("IdleTimeout is %s, want consts.IdleTimeout (%s)", srv.IdleTimeout, consts.IdleTimeout)
+	}
+	// The assertion above would also pass if the two constants happened to be equal, which is
+	// exactly the state the fallback produces. They must not be.
+	if srv.IdleTimeout <= srv.ReadTimeout {
+		t.Fatalf("IdleTimeout %s must be longer than ReadTimeout %s: an idle pooled connection is not a stalled request",
+			srv.IdleTimeout, srv.ReadTimeout)
+	}
+	// Above Caddy's 2-minute default keep-alive, so the proxy retires an idle connection first
+	// and the server never initiates the close that a dispatched POST can race.
+	if srv.IdleTimeout <= 2*time.Minute {
+		t.Fatalf("IdleTimeout %s must exceed Caddy's 2m default keep-alive, or ingest is the side closing pooled connections", srv.IdleTimeout)
+	}
+	if srv.ReadTimeout != consts.ReadTimeout || srv.ReadHeaderTimeout != consts.ReadHeaderTimeout {
+		t.Fatalf("got ReadTimeout %s / ReadHeaderTimeout %s, want %s / %s",
+			srv.ReadTimeout, srv.ReadHeaderTimeout, consts.ReadTimeout, consts.ReadHeaderTimeout)
+	}
+}
+
 // TestRunCutsOffARequestThatNeverFinishes pins the bound that makes the shutdown deadline mean
 // something. ReadHeaderTimeout only covers the headers, so a client that sends them and then
 // dribbles its body out — or never sends it at all — keeps a handler running for as long as it

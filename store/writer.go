@@ -183,6 +183,10 @@ func (w *Writer) openFor(t time.Time) error {
 }
 
 // closeFile terminates the current gzip member and closes the segment. Callers must hold w.mu.
+//
+// Both failures are latched. Close writes the buffered tail and the trailer, so a failure here
+// lost records, and it has already cleared the segment state: without the latch the next Append
+// opens a fresh segment and answers 200 behind a green /healthz.
 func (w *Writer) closeFile() error {
 	if w.gz == nil {
 		return nil
@@ -191,10 +195,10 @@ func (w *Writer) closeFile() error {
 	fileErr := w.file.Close()
 	w.gz, w.file, w.day = nil, nil, ""
 	if gzErr != nil {
-		return fmt.Errorf("closing gzip stream: %w", gzErr)
+		return w.fail(fmt.Errorf("closing gzip stream: %w", gzErr))
 	}
 	if fileErr != nil {
-		return fmt.Errorf("closing report file: %w", fileErr)
+		return w.fail(fmt.Errorf("closing report file: %w", fileErr))
 	}
 	return nil
 }

@@ -239,6 +239,23 @@ var _ = Describe("Writer", func() {
 			Expect(w.Fatal()).To(BeClosed())
 		})
 
+		// The rollover close writes the previous day's buffered tail and trailer. A failure
+		// there loses records, and closeFile has already cleared the segment state, so without
+		// the latch the next Append opens a fresh segment and answers 200.
+		It("is reported through Fatal and Err when the UTC rollover close hits it", func() {
+			w, err := NewWriter(dir)
+			Expect(err).ToNot(HaveOccurred())
+			defer func() { _ = w.Close() }()
+			Expect(w.Append(dataFor("a"), testDay)).To(Succeed())
+			Expect(w.Fatal()).ToNot(BeClosed())
+
+			breakFile(w)
+
+			Expect(w.Append(dataFor("b"), testDay.AddDate(0, 0, 1))).ToNot(Succeed())
+			Expect(w.Fatal()).To(BeClosed())
+			Expect(w.Err()).To(HaveOccurred())
+		})
+
 		It("is reported through Fatal and Err when Append hits it", func() {
 			w, err := NewWriter(dir)
 			Expect(err).ToNot(HaveOccurred())

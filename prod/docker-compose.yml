@@ -22,6 +22,11 @@ services:
     command: ["/process"]
     restart: unless-stopped
     user: "1000:1000"
+    # Longer than the shutdown budget: process gives in-flight requests 10s, then up to 30s
+    # more for a background job that was already running. The purge is the one that matters —
+    # it renames a day's segments aside before unlinking them, and Docker's default 10s grace
+    # would SIGKILL between the two, leaving a day half-hidden but still reported by HasDay.
+    stop_grace_period: 45s
     expose:
       - "8080"
     environment:

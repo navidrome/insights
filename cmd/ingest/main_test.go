@@ -17,12 +17,8 @@ import (
 	"github.com/navidrome/navidrome/core/metrics/insights"
 )
 
-// TestRunDrainsInFlightRequestBeforeReturning pins the shutdown ordering main depends on.
-//
-// main closes the report writer as soon as run returns, and Append fails with os.ErrClosed
-// after that. So run returning while a request is still being served means that report is
-// answered 500 and lost. Serve returns the moment the listener closes, which is the *start*
-// of Shutdown's drain, so run has to wait for the drain to finish on its own.
+// TestRunDrainsInFlightRequestBeforeReturning pins the ordering main depends on: main closes
+// the writer as soon as run returns, and Serve returns at the *start* of Shutdown's drain.
 func TestRunDrainsInFlightRequestBeforeReturning(t *testing.T) {
 	dir := t.TempDir()
 	writer, err := store.NewWriter(dir)
@@ -31,8 +27,7 @@ func TestRunDrainsInFlightRequestBeforeReturning(t *testing.T) {
 	}
 	defer func() { _ = writer.Close() }()
 
-	// Block in front of the real router, so the request is provably in flight when the
-	// shutdown signal arrives instead of depending on timing to get it there.
+	// Blocks in front of the real router, so the request is provably in flight.
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	router := newRouter(writer)
@@ -111,7 +106,7 @@ func TestRunDrainsInFlightRequestBeforeReturning(t *testing.T) {
 		t.Fatal("timed out waiting for the response")
 	}
 
-	// main's next step. With the drain finished this cannot lose the report.
+	// main's next step.
 	if err := writer.Close(); err != nil {
 		t.Fatalf("closing writer: %v", err)
 	}
@@ -129,16 +124,11 @@ func TestRunDrainsInFlightRequestBeforeReturning(t *testing.T) {
 	}
 }
 
-// TestRunWaitsForAHandlerThatOutlivesTheShutdownDeadline is the case http.Server.Shutdown does
-// not cover. It returns a deadline error and leaves the handler it gave up on running, so a run
-// that treated Shutdown returning as "the drain is over" would let main close the report writer
-// under a live handler: that handler's Append gets os.ErrClosed and a report the client was
-// answered for is gone.
-//
-// The assertion that matters is the last one, that the report is on disk. A spec that only
-// checked that run returned would pass against a run that waits for nothing.
+// TestRunWaitsForAHandlerThatOutlivesTheShutdownDeadline covers what Shutdown does not: it
+// returns on its deadline and leaves that handler running. The last assertion is the one that
+// matters, that the report reached disk.
 func TestRunWaitsForAHandlerThatOutlivesTheShutdownDeadline(t *testing.T) {
-	// Short enough that the deadline is reached inside the spec rather than in ten seconds.
+	// Short enough to reach the deadline inside the spec.
 	defer withTimeouts(100*time.Millisecond, 5*time.Second)()
 
 	dir := t.TempDir()
@@ -151,9 +141,8 @@ func TestRunWaitsForAHandlerThatOutlivesTheShutdownDeadline(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	appendErr := make(chan error, 1)
-	// The real handler's shape: decode the body, then append. The decode happens before the
-	// block, so force-closing the connection at the shutdown deadline cannot rob the handler of
-	// the payload — the report is accepted, and the only question left is whether it is written.
+	// Decode before the block, as the real handler does, so force-closing the connection
+	// cannot rob the handler of the payload.
 	handler := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		var data insights.Data
 		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
@@ -189,7 +178,7 @@ func TestRunWaitsForAHandlerThatOutlivesTheShutdownDeadline(t *testing.T) {
 	go func() {
 		resp, err := http.Post("http://"+ln.Addr().String()+"/collect", "application/json", bytes.NewReader(body))
 		if err != nil {
-			// Expected: the connection is force-closed once Shutdown gives up on it.
+			// Expected: force-closed once Shutdown gives up on it.
 			reqErr <- err
 			return
 		}
@@ -206,7 +195,7 @@ func TestRunWaitsForAHandlerThatOutlivesTheShutdownDeadline(t *testing.T) {
 
 	cancel() // SIGTERM, with a report accepted and not yet written
 
-	// Well past the shutdown deadline, with the handler still in the middle of the request.
+	// Well past the shutdown deadline, handler still mid-request.
 	select {
 	case err := <-runErr:
 		t.Fatalf("run returned (err=%v) while a handler could still Append: main would close the writer under it", err)
@@ -251,25 +240,21 @@ func TestRunWaitsForAHandlerThatOutlivesTheShutdownDeadline(t *testing.T) {
 	}
 }
 
-// withTimeouts shrinks the shutdown deadlines for one spec and returns the restore, so the
-// deadline path can be reached in milliseconds instead of the ten seconds production waits.
+// withTimeouts shrinks the shutdown deadlines for one spec and returns the restore.
 func withTimeouts(shutdown, drain time.Duration) func() {
 	prevShutdown, prevDrain := shutdownTimeout, handlerDrainTimeout
 	shutdownTimeout, handlerDrainTimeout = shutdown, drain
 	return func() { shutdownTimeout, handlerDrainTimeout = prevShutdown, prevDrain }
 }
 
-// TestRunForceClosesConnectionsOnTheShutdownDeadline pins the other half of the same path. The
-// wait above is only bounded because the connections go away: Shutdown leaves the connection it
-// gave up on open, so a handler blocked reading from a client that never finishes would hold the
-// process open until handlerDrainTimeout on every single stop.
+// TestRunForceClosesConnectionsOnTheShutdownDeadline pins the other half: the wait above is
+// bounded only because the connections go away.
 func TestRunForceClosesConnectionsOnTheShutdownDeadline(t *testing.T) {
 	defer withTimeouts(100*time.Millisecond, 5*time.Second)()
 
 	entered := make(chan struct{})
 	readErr := make(chan error, 1)
-	// Blocks reading a body the client never sends, which is what a stalled upload looks like
-	// from inside a handler. Only the connection being closed can release it.
+	// Blocks reading a body the client never sends. Only closing the connection releases it.
 	handler := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		close(entered)
 		_, err := io.ReadAll(r.Body)
@@ -321,28 +306,22 @@ func TestRunForceClosesConnectionsOnTheShutdownDeadline(t *testing.T) {
 	}
 }
 
-// TestServerSetsAnIdleTimeoutOfItsOwn pins the one timeout whose default is a trap.
-//
-// net/http's (*Server).idleTimeout() returns ReadTimeout when IdleTimeout is zero, so setting a
-// 5-second ReadTimeout also silently retires pooled keep-alive connections after 5 seconds of
-// idle. Caddy reverse-proxies to ingest over a connection pool, and Go's transport will not
-// replay a POST with a body when the server closes a pooled connection mid-dispatch — so every
-// one of those races is a 502 and a report lost, which is the failure this whole branch exists
-// to remove. Leaving IdleTimeout unset would be that bug, silently.
+// TestServerSetsAnIdleTimeoutOfItsOwn pins the one timeout whose default is a trap: net/http
+// falls back to ReadTimeout, which would retire Caddy's pooled connections after 5s, and Go
+// will not replay a POST body.
 func TestServerSetsAnIdleTimeoutOfItsOwn(t *testing.T) {
 	srv := newServer(http.NotFoundHandler())
 
 	if srv.IdleTimeout != consts.IdleTimeout {
 		t.Fatalf("IdleTimeout is %s, want consts.IdleTimeout (%s)", srv.IdleTimeout, consts.IdleTimeout)
 	}
-	// The assertion above would also pass if the two constants happened to be equal, which is
-	// exactly the state the fallback produces. They must not be.
+	// The assertion above would also pass if the two were equal, which is what the fallback
+	// produces.
 	if srv.IdleTimeout <= srv.ReadTimeout {
 		t.Fatalf("IdleTimeout %s must be longer than ReadTimeout %s: an idle pooled connection is not a stalled request",
 			srv.IdleTimeout, srv.ReadTimeout)
 	}
-	// Above Caddy's 2-minute default keep-alive, so the proxy retires an idle connection first
-	// and the server never initiates the close that a dispatched POST can race.
+	// Above Caddy's 2-minute keep-alive, so the proxy closes idle connections first.
 	if srv.IdleTimeout <= 2*time.Minute {
 		t.Fatalf("IdleTimeout %s must exceed Caddy's 2m default keep-alive, or ingest is the side closing pooled connections", srv.IdleTimeout)
 	}
@@ -353,15 +332,10 @@ func TestServerSetsAnIdleTimeoutOfItsOwn(t *testing.T) {
 }
 
 // TestRunCutsOffARequestThatNeverFinishes pins the bound that makes the shutdown deadline mean
-// something. ReadHeaderTimeout only covers the headers, so a client that sends them and then
-// dribbles its body out — or never sends it at all — keeps a handler running for as long as it
-// likes. Shutdown would then wait on that handler, hit its deadline on every stop, and the whole
-// drain would degrade into force-closing connections. ReadTimeout takes the choice away from the
-// client. It is deliberately shorter than shutdownTimeout: a request that cannot outlive the
-// read deadline cannot outlive the drain either.
+// something: ReadHeaderTimeout covers only the headers, so without ReadTimeout a stalled body
+// holds a handler for as long as the client likes.
 //
-// This spec is slower than the rest by consts.ReadTimeout, which is the point: nothing shorter
-// distinguishes a server that cuts the request off from one that waits forever.
+// It is slower than the rest by consts.ReadTimeout, which is the point.
 func TestRunCutsOffARequestThatNeverFinishes(t *testing.T) {
 	if consts.ReadTimeout >= shutdownTimeout {
 		t.Fatalf("ReadTimeout %s must stay under the shutdown deadline %s", consts.ReadTimeout, shutdownTimeout)
@@ -391,7 +365,7 @@ func TestRunCutsOffARequestThatNeverFinishes(t *testing.T) {
 		t.Fatalf("dialling: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
-	// Headers promising a body this client will never send.
+	// Headers promising a body this client never sends.
 	if _, err := conn.Write([]byte("POST /collect HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n")); err != nil {
 		t.Fatalf("writing request: %v", err)
 	}
@@ -402,7 +376,7 @@ func TestRunCutsOffARequestThatNeverFinishes(t *testing.T) {
 		t.Fatal("timed out waiting for the request to reach the handler")
 	}
 
-	// No shutdown here: the read deadline alone has to end this request.
+	// No shutdown: the read deadline alone has to end this request.
 	select {
 	case err := <-readErr:
 		if err == nil {
@@ -420,13 +394,9 @@ func TestRunCutsOffARequestThatNeverFinishes(t *testing.T) {
 	}
 }
 
-// TestFatalWriterErrorStopsTheServer pins the recovery path for a permanently broken report
-// writer.
-//
-// gzip.Writer latches its first write error forever, so after one ENOSPC or EIO every later
-// Append fails, /collect answers 500 for the rest of the process's life, and /healthz stays
-// green — nothing restarts the container. Shutting the server down instead turns that into a
-// supervisor restart, which opens a fresh segment.
+// TestFatalWriterErrorStopsTheServer pins the recovery path for a permanently broken writer:
+// without it, /collect 500s forever behind a green /healthz and nothing restarts the
+// container.
 func TestFatalWriterErrorStopsTheServer(t *testing.T) {
 	dir := t.TempDir()
 	writer, err := store.NewWriter(dir)
@@ -440,8 +410,8 @@ func TestFatalWriterErrorStopsTheServer(t *testing.T) {
 		t.Fatalf("listening: %v", err)
 	}
 
-	// Stands in for store.Writer.Fatal: the writer only closes that channel on a real disk
-	// failure, which a test cannot provoke portably. store's own suite covers the closing.
+	// Stands in for store.Writer.Fatal, which only closes on a real disk failure. store's own
+	// suite covers the closing.
 	fatal := make(chan struct{})
 	ctx, cancel := watchWriter(context.Background(), fatal)
 	defer cancel()
@@ -449,8 +419,8 @@ func TestFatalWriterErrorStopsTheServer(t *testing.T) {
 	runErr := make(chan error, 1)
 	go func() { runErr <- run(ctx, ln, newRouter(writer)) }()
 
-	// The server is serving before the failure, so a run that returns below returns because
-	// of the fatal signal and not because it never started.
+	// Serving before the failure, so run returns below because of the signal and not because
+	// it never started.
 	resp, err := http.Get("http://" + ln.Addr().String() + "/healthz")
 	if err != nil {
 		t.Fatalf("probing /healthz: %v", err)
@@ -478,10 +448,8 @@ func TestFatalWriterErrorStopsTheServer(t *testing.T) {
 	}
 }
 
-// breakingListener serves one connection and then breaks, which is how an unexpected Serve
-// error arrives while a request accepted a moment earlier is still being handled. The second
-// Accept blocks until the test says so, so the failure lands at a point it chooses rather than
-// at one the scheduler picks.
+// breakingListener serves one connection and then breaks, with the second Accept blocking
+// until the test releases it, so the Serve error lands at a chosen point.
 type breakingListener struct {
 	net.Listener
 	accepts int
@@ -494,19 +462,12 @@ func (l *breakingListener) Accept() (net.Conn, error) {
 		return l.Listener.Accept()
 	}
 	<-l.breakAt
-	// Not a net.Error, so Serve does not treat it as temporary and retry: it gives up and
-	// returns it, exactly as it would for a broken accept loop.
+	// Not a net.Error, so Serve gives up rather than retrying.
 	return nil, errors.New("accept boom")
 }
 
-// TestRunDrainsInFlightRequestAfterServeError is the same guarantee as the test above, for the
-// path where Serve fails on its own rather than being shut down.
-//
-// The reports already accepted are still being served when that happens, and main closes the
-// report writer as soon as run returns — so returning straight away answers a report that was
-// accepted with a 500 and loses it. The assertion that matters is the last one: that the report
-// is on disk. A test that only checked that run returned the Serve error would pass against a
-// run that drained nothing.
+// TestRunDrainsInFlightRequestAfterServeError is the same guarantee for the path where Serve
+// fails on its own. The last assertion is the one that matters, that the report reached disk.
 func TestRunDrainsInFlightRequestAfterServeError(t *testing.T) {
 	dir := t.TempDir()
 	writer, err := store.NewWriter(dir)
@@ -531,8 +492,7 @@ func TestRunDrainsInFlightRequestAfterServeError(t *testing.T) {
 	ln := &breakingListener{Listener: tcp, breakAt: make(chan struct{})}
 	defer func() { _ = ln.Close() }()
 
-	// Never cancelled: only Serve's own failure can release run here, as on the bind-failure
-	// path in production.
+	// Never cancelled, as on the bind-failure path in production.
 	runErr := make(chan error, 1)
 	go func() { runErr <- run(context.Background(), ln, blocking) }()
 
@@ -594,7 +554,7 @@ func TestRunDrainsInFlightRequestAfterServeError(t *testing.T) {
 		t.Fatal("timed out waiting for the response")
 	}
 
-	// main's next step, and the point of the drain: the accepted report is already written.
+	// main's next step, and the point of the drain.
 	if err := writer.Close(); err != nil {
 		t.Fatalf("closing writer: %v", err)
 	}
@@ -612,9 +572,8 @@ func TestRunDrainsInFlightRequestAfterServeError(t *testing.T) {
 	}
 }
 
-// TestRunReturnsServeError checks that a serve failure comes straight back instead of waiting
-// on a shutdown that will never be signalled. main has to reach writer.Close on this path too,
-// or a process that can never bind leaves the lock file held.
+// TestRunReturnsServeError checks that a serve failure comes straight back, so main reaches
+// writer.Close and a process that can never bind does not hold the lock file.
 func TestRunReturnsServeError(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -624,7 +583,7 @@ func TestRunReturnsServeError(t *testing.T) {
 		t.Fatalf("closing listener: %v", err)
 	}
 
-	// ctx is never cancelled: nothing but Serve's own error can release run here.
+	// ctx is never cancelled: only Serve's own error can release run.
 	done := make(chan error, 1)
 	go func() { done <- run(context.Background(), ln, http.NotFoundHandler()) }()
 

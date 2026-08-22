@@ -1,5 +1,5 @@
-// Command ingest accepts insights reports and appends them to the daily report file.
-// It runs no background jobs: restarting the process worker never interrupts collection.
+// Command ingest accepts insights reports and appends them to the daily report file. It runs
+// no background jobs, so restarting the process worker never interrupts collection.
 package main
 
 import (
@@ -22,15 +22,8 @@ import (
 )
 
 // shutdownTimeout bounds how long in-flight reports have to finish once a signal arrives.
-//
-// handlerDrainTimeout bounds the wait that follows it. Shutdown returning a deadline error does
-// not stop the handlers it gave up on, so the connections are force-closed and the handlers are
-// given this much longer to unwind before the report writer is closed anyway. It is short
-// because a handler whose connection is gone has nothing left to wait for; the only reason it
-// is bounded at all is that a process that never exits is worse than one accepted report lost.
-//
-// Both are variables, not constants, so the specs can drive the deadline path without spending
-// ten real seconds per run.
+// handlerDrainTimeout bounds the wait after that for handlers Shutdown gave up on, whose
+// connections run force-closes first. Variables so the specs can reach the deadline path.
 var (
 	shutdownTimeout     = 10 * time.Second
 	handlerDrainTimeout = 5 * time.Second
@@ -50,20 +43,16 @@ func main() {
 		port = consts.DefaultPort
 	}
 
-	// Shut down cleanly so the gzip member is terminated and buffered reports are not lost.
+	// Terminate the gzip member cleanly so buffered reports are not lost.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// A latched gzip error is permanent: every later report would be answered 500 for the
-	// rest of this process's life, while /healthz stayed green. Treat it as a shutdown
-	// signal instead, so the in-flight drain and writer.Close still run and the supervisor
-	// restarts us into a fresh segment.
+	// A latched write error would 500 every later report behind a green /healthz. Treat it as a
+	// shutdown signal so the supervisor restarts us into a fresh segment.
 	ctx, cancel := watchWriter(ctx, writer.Fatal())
 	defer cancel()
 
-	// A failure to bind falls through rather than exiting, so writer.Close below still
-	// releases the lock file. The failure is remembered instead, and turned into a non-zero
-	// exit once the writer is closed.
+	// Fall through rather than exiting, so writer.Close below still releases the lock file.
 	var serveErr error
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
@@ -77,29 +66,26 @@ func main() {
 		}
 	}
 
-	// run only returns once the drain is complete, so no handler can still be appending here.
+	// run returns only once the drain is complete.
 	if err := writer.Close(); err != nil {
 		log.Printf("Error closing report writer: %s", err)
 	}
 	if err := writer.Err(); err != nil {
-		// Exit non-zero so the failure is visible in `docker compose ps` and in the exit
-		// status, rather than looking like a clean stop. The deferred cancels are skipped
-		// on purpose: the drain and writer.Close have already run.
+		// Non-zero so this does not look like a clean stop. The skipped deferred cancels are
+		// fine: the drain and writer.Close have already run.
 		log.Printf("Ingest stopped after an unrecoverable write error: %s", err)
 		os.Exit(1)
 	}
 	if serveErr != nil {
-		// Same reason as the write error above. A port already in use on redeploy, or an
-		// accept loop that broke, is the failure this exit status exists to report: without
-		// it the container stops with code 0 and reads as a clean shutdown everywhere.
+		// Same reason: a port already in use on redeploy must not exit 0.
 		log.Printf("Ingest stopped after a server error: %s", serveErr)
 		os.Exit(1)
 	}
 	log.Print("Ingest stopped")
 }
 
-// watchWriter derives a context that is cancelled either with its parent or as soon as the
-// report writer reports an unrecoverable error, whichever comes first.
+// watchWriter cancels with its parent or on an unrecoverable writer error, whichever is
+// first.
 func watchWriter(parent context.Context, fatal <-chan struct{}) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
 	go func() {
@@ -113,8 +99,7 @@ func watchWriter(parent context.Context, fatal <-chan struct{}) (context.Context
 	return ctx, cancel
 }
 
-// newRouter wires the two public endpoints. Only /collect is rate limited: /healthz has to stay
-// answerable for liveness probes.
+// newRouter wires the two public endpoints. /healthz is not rate limited: liveness probes.
 func newRouter(writer *store.Writer) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
@@ -128,23 +113,17 @@ func newRouter(writer *store.Writer) http.Handler {
 	return r
 }
 
-// inflight counts the handlers that are running right now. main closes the report writer as
-// soon as run returns and Append fails with os.ErrClosed after that, so the invariant run has
-// to hold up is: the writer is not closed while a handler can still call Append.
-//
-// http.Server.Shutdown almost gives that for free, but not quite — it returns as soon as its
-// context expires and leaves the handlers it gave up on running. This count is what run waits
-// on afterwards.
+// inflight counts the handlers running right now, so run can hold one invariant: the writer is
+// not closed while a handler can still call Append. Shutdown alone does not give that, because
+// it returns on its deadline and leaves those handlers running.
 type inflight struct {
 	mu   sync.Mutex
 	n    int
 	zero chan struct{} // non-nil only while wait is watching, closed when n reaches 0
 }
 
-// track wraps h so every request is counted for as long as its handler runs. It counts /healthz
-// as well as /collect: the probe never touches the writer, but it finishes in microseconds, and
-// a counter that has to know which route it is on is a counter that stops covering a route
-// somebody adds later.
+// track counts every request for as long as its handler runs, /healthz included: a counter
+// that has to know its route stops covering the next route somebody adds.
 func (c *inflight) track(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		c.enter()
@@ -169,10 +148,8 @@ func (c *inflight) leave() {
 	}
 }
 
-// wait blocks until no handler is running or timeout expires, and reports which of the two
-// happened. A sync.WaitGroup would be the obvious tool and is the wrong one here: it cannot be
-// waited on with a deadline, and Add racing Wait is exactly the shape of a request accepted a
-// moment before Shutdown closed the listener.
+// wait blocks until no handler is running or timeout expires, and reports which. A WaitGroup
+// cannot be waited on with a deadline, and Add racing Wait is exactly this situation.
 func (c *inflight) wait(timeout time.Duration) bool {
 	c.mu.Lock()
 	if c.n == 0 {
@@ -195,38 +172,28 @@ func (c *inflight) wait(timeout time.Duration) bool {
 	}
 }
 
-// newServer builds the ingest server. It is a function of its own so the timeouts can be
-// asserted directly: one of them is only correct because it is set, and a spec that went
-// through run would have to infer it from behaviour that takes minutes to show.
+// newServer builds the ingest server. Separate so the specs can assert the timeouts directly
+// instead of inferring them from behaviour that takes minutes to show.
 func newServer(h http.Handler) *http.Server {
 	return &http.Server{
 		ReadHeaderTimeout: consts.ReadHeaderTimeout,
-		// Without a whole-request deadline a client that uploads its body one byte at a time
-		// keeps a handler running for as long as it likes, which is the easiest way to push a
-		// request past the shutdown deadline in run.
+		// Without a whole-request deadline a slow-loris upload holds a handler past run's
+		// shutdown deadline.
 		ReadTimeout: consts.ReadTimeout,
-		// Never left to net/http's fallback, which would make this ReadTimeout: 5 seconds of
-		// idle before ingest closes a pooled keep-alive under Caddy, and a close that races a
-		// dispatched POST loses that report outright. See consts.IdleTimeout.
+		// Never left to net/http's fallback, which is ReadTimeout. See consts.IdleTimeout.
 		IdleTimeout: consts.IdleTimeout,
 		Handler:     h,
 	}
 }
 
-// run serves ln until ctx is cancelled, then drains the requests already in flight, returning
-// only once that drain has finished.
-//
-// Waiting for the drain is what makes the report writer safe to close afterwards: Append fails
-// with os.ErrClosed once Close has run, so a handler still mid-request when the writer closed
-// would answer 500 and drop a report that had already been accepted.
+// run serves ln until ctx is cancelled, then returns only once the in-flight requests have
+// drained. That drain is what makes the report writer safe for main to close afterwards.
 func run(ctx context.Context, ln net.Listener, h http.Handler) error {
 	var live inflight
 	server := newServer(live.track(h))
 
-	// serveFailed lets a Serve error start the drain itself. Nothing else will: a listener that
-	// cannot be served — a port already in use, above all — leaves ctx uncancelled forever,
-	// because main only cancels it on a signal or on a fatal writer error. Waiting on a
-	// shutdown nobody triggered is how this path deadlocks.
+	// serveFailed lets a Serve error start the drain. Nothing else will: main cancels ctx only
+	// on a signal or a fatal writer error, so waiting for one here would deadlock.
 	serveFailed := make(chan struct{})
 	done := make(chan struct{})
 	go func() { //#nosec G118 -- the shutdown deadline must not derive from ctx: ctx is already cancelled here, so a derived context would expire immediately and abort the drain
@@ -238,18 +205,13 @@ func run(ctx context.Context, ln net.Listener, h http.Handler) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			// Shutdown gave up on a request that outlived the deadline. It returns the error
-			// and leaves that connection open with its handler still running, so waiting on
-			// the handler alone could wait forever. Close the connections instead: the handler
-			// loses its client and unwinds, and it is the unwinding that this path needs, not
-			// the response.
+			// Shutdown left a handler running on an open connection. Closing it makes the
+			// handler unwind, which is what this path needs, not the response.
 			log.Printf("Error shutting down server, closing connections: %s", err)
 			_ = server.Close()
 		}
-		// Only now is the writer safe to close. Shutdown returning does not mean the handlers
-		// have finished — on the deadline path it means the opposite — and a handler that
-		// reaches Append after Close gets os.ErrClosed and loses a report the client was never
-		// told to resend.
+		// Only now is the writer safe to close: a handler reaching Append after Close loses a
+		// report the client was never told to resend.
 		if !live.wait(handlerDrainTimeout) {
 			log.Printf("Report handlers still running %s after the shutdown deadline; closing the "+
 				"report writer anyway, so an in-flight report may be lost", handlerDrainTimeout)
@@ -258,19 +220,14 @@ func run(ctx context.Context, ln net.Listener, h http.Handler) error {
 
 	err := server.Serve(ln)
 	if errors.Is(err, http.ErrServerClosed) {
-		// Serve returns when the listener closes, which is the start of the drain and not
-		// the end of it. Shutdown is still running: wait for it.
+		// The listener closing starts the drain; Shutdown is still running.
 		<-done
 		return nil
 	}
-	// Serve failed for its own reasons — the accept loop broke, not the listener closing. The
-	// requests it accepted before that are still being served, and main closes the report
-	// writer the moment this returns, so returning now answers an already-accepted report 500
-	// and loses it. Same bounded drain as the clean path, started here because nothing else
-	// will start it.
+	// The accept loop broke. Requests accepted before that are still being served, so run the
+	// same bounded drain rather than losing them.
 	close(serveFailed)
 	<-done
-	// The Serve failure, not the shutdown's: that is the one that explains why the process is
-	// stopping.
+	// The Serve failure explains why the process is stopping; the shutdown's does not.
 	return err
 }

@@ -678,10 +678,8 @@ var _ = Describe("Charts", func() {
 			Expect(chartsData[5].(map[string]interface{})["id"]).To(Equal("albumsArtists"))
 		})
 
-		// cmd/process serves this very file at /api/charts. A plain O_TRUNC rewrite empties it
-		// in place, so a request landing in the window gets a 200 with a truncated body — and a
-		// restart near 00:05 UTC can put two chart generations into that window at once. A
-		// rename swaps a finished file in: a reader gets the old charts or the new ones.
+		// cmd/process serves this file at /api/charts, so an O_TRUNC rewrite would answer a
+		// request landing in the window with a truncated body.
 		It("republishes charts.json by rename rather than truncating it in place", func() {
 			s := summary.Summary{
 				NumInstances: 100,
@@ -703,7 +701,7 @@ var _ = Describe("Charts", func() {
 			Expect(os.SameFile(before, after)).To(BeFalse(),
 				"the served name must be pointed at a finished file, not at one being rewritten under it")
 
-			// And nothing else is left in the directory the web server publishes.
+			// And no temp file is left in the published directory.
 			found, err := os.ReadDir(outputDir)
 			Expect(err).NotTo(HaveOccurred())
 			var names []string

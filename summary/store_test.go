@@ -22,8 +22,7 @@ var _ = Describe("SaveSummary", func() {
 		DeferCleanup(func() { _ = os.Unsetenv("DATA_FOLDER") })
 	})
 
-	// A summary big enough that writing it is not instantaneous, which is what a real one
-	// looks like: thousands of version, player and suffix keys.
+	// Big enough that writing it is not instantaneous, like a real one.
 	bigSummary := func(n int) Summary {
 		s := Summary{NumInstances: 1, Versions: make(map[string]uint64, n)}
 		for i := range n {
@@ -53,19 +52,16 @@ var _ = Describe("SaveSummary", func() {
 		Expect(names).To(ConsistOf("summary-2026-08-03.json"))
 	})
 
-	// The reason the write has to be atomic. Summarization overlaps with chart generation and
-	// with the /charts handler, both of which call GetSummaries. A plain O_TRUNC write leaves
-	// the file empty for as long as the write takes, and a reader that lands in that window
-	// logs "skipping malformed file" and silently drops the day from the charts.
+	// The reason the write has to be atomic: a reader landing in an O_TRUNC window logs
+	// "skipping malformed file" and drops the day from the charts.
 	It("never exposes a half-written summary to a concurrent reader", func() {
 		const keys = 20000
 		summary := bigSummary(keys)
 		Expect(SaveSummary(summary, day)).To(Succeed())
 		path := SummaryFilePath(day)
 
-		// stop keeps a failing spec from leaking a writer into the next one: SaveSummary
-		// resolves DATA_FOLDER on every call, so a leaked writer would save into whatever
-		// temp dir the following spec sets up.
+		// SaveSummary resolves DATA_FOLDER per call, so a leaked writer would save into the
+		// next spec's temp dir.
 		stop := make(chan struct{})
 		done := make(chan struct{})
 		DeferCleanup(func() {
@@ -85,8 +81,7 @@ var _ = Describe("SaveSummary", func() {
 			}
 		}()
 
-		// Reads the file the way GetSummaries does, but without the directory walk, so the
-		// loop is tight enough to land inside a save that is in progress.
+		// Like GetSummaries but without the directory walk, so the loop lands inside a save.
 		reads := 0
 		for {
 			select {

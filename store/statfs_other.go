@@ -4,10 +4,8 @@ package store
 
 import "syscall"
 
-// blockSize returns the unit that a Statfs_t's block counts are expressed in. Only Linux
-// carries a separate Frsize field; elsewhere — darwin, the development platform — Bsize is the
-// fragment size. Its type differs by platform (uint32 on darwin, int64 on Linux), so the
-// conversion is needed either way.
+// blockSize returns the unit a Statfs_t's block counts are expressed in. Only Linux has a
+// separate Frsize; elsewhere Bsize is the fragment size.
 func blockSize(st *syscall.Statfs_t) uint64 {
 	return uint64(st.Bsize)
 }

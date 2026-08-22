@@ -45,9 +45,8 @@ func SaveSummary(summary Summary, t time.Time) error {
 		return err
 	}
 
-	// Atomic because GetSummaries runs concurrently with summarization: a reader that catches
-	// an O_TRUNC write in progress logs the file as malformed and drops that day from the
-	// charts. See fsutil.WriteFileAtomic.
+	// Atomic: GetSummaries runs concurrently and would log a half-written file as malformed,
+	// dropping that day from the charts.
 	return fsutil.WriteFileAtomic(filePath, data, consts.FilePermissions)
 }
 

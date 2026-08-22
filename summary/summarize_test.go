@@ -79,15 +79,12 @@ var _ = Describe("SummarizeData", func() {
 		Expect(summaries[0].Data.NumInstances).To(Equal(int64(2)))
 	})
 
-	// A backfill and the hourly purge are separate OS processes, so no mutex covers the gap
-	// between listing a day's segments and reading them. What matters here is the *partial*
-	// read: a day that loses all of its segments mid-read already summarizes to zero instances
-	// and returns before the save, but one that loses some of them produces a real, wrong
-	// number that would replace a correct summary.
+	// A backfill and the purge are separate processes, so nothing covers the gap between
+	// listing a day's segments and reading them. A *partial* loss is what matters: losing all
+	// of them already summarizes to zero and returns before the save.
 	Describe("a day whose segments change while it is summarized", func() {
-		// interpose replaces the first segment listing — the one SummarizeData captures as its
-		// baseline — with the same listing plus a side effect, which is how the purge lands in
-		// the middle of the read at a point the spec picks rather than the scheduler.
+		// interpose adds a side effect to the baseline listing, so the purge lands mid-read at
+		// a point the spec picks.
 		interpose := func(during func(paths []string)) {
 			GinkgoHelper()
 			prev := segmentPathsFor
@@ -127,9 +124,7 @@ var _ = Describe("SummarizeData", func() {
 				"a partial read overwrote a correct summary")
 		})
 
-		// The other direction, which must stay allowed: ingest opens a new segment on every
-		// restart and today's day gains segments while it is being summarized. A check that
-		// treated any change as unsafe would stop the current day from ever being summarized.
+		// Must stay allowed: today's day gains segments while it is being summarized.
 		It("still saves when a segment appears", func() {
 			writeReports("a")
 

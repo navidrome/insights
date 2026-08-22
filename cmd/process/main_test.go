@@ -23,10 +23,8 @@ func TestCheckDays(t *testing.T) {
 		{days: 0, wantErr: true},
 		{days: 1},
 		{days: consts.SummarizeLookbackDays},
-		// checkDays gates both modes, so it must NOT bound the lookback against the purge
-		// floor: -once is how a backfill reaches back over the months of history that
-		// free-space retention now keeps. Moving that bound in here would break the backfill
-		// while every scheduled-path spec below still passed, so it is pinned explicitly.
+		// checkDays gates both modes, so it must NOT apply the purge floor: -once is how a
+		// backfill reaches back over months of history.
 		{days: consts.MinRetentionDays},
 		{days: consts.MinRetentionDays + 20},
 	} {
@@ -37,9 +35,8 @@ func TestCheckDays(t *testing.T) {
 	}
 }
 
-// The scheduled summarize job runs alongside the hourly purge, so its lookback must stay inside
-// the purge floor or a day can be deleted mid-window. Pinned from both sides: one day under the
-// floor is allowed, the floor itself is not.
+// The scheduled lookback must stay inside the purge floor. Pinned from both sides: one day
+// under is allowed, the floor itself is not.
 func TestCheckScheduledDays(t *testing.T) {
 	for _, tc := range []struct {
 		days    int
@@ -58,8 +55,8 @@ func TestCheckScheduledDays(t *testing.T) {
 	}
 }
 
-// The bound is worth nothing unless the scheduled entry point actually applies it. startTasks
-// returns before starting anything here, so no cron outlives the test.
+// The bound is worth nothing unless startTasks applies it. It returns before starting
+// anything, so no cron outlives the test.
 func TestStartTasksRejectsLookbackPastThePurgeFloor(t *testing.T) {
 	_, err := startTasks(t.TempDir(), consts.MinRetentionDays)
 	if err == nil {
@@ -70,13 +67,9 @@ func TestStartTasksRejectsLookbackPastThePurgeFloor(t *testing.T) {
 	}
 }
 
-// TestSummarizeSerializesOverlappingRuns pins the mutual exclusion main relies on.
-//
-// main starts a summarization run in a goroutine while the cron for the same job is already
-// running, so a restart at the top of an even hour has both going at once. Each one ends in a
-// write of the same summary file per date, and a run takes minutes of gzip scanning on the
-// production box, so overlapping runs are what tears a summary file rather than a theoretical
-// race. cron.SkipIfStillRunning would not cover this: the startup run is not a cron job.
+// TestSummarizeSerializesOverlappingRuns pins the mutual exclusion main relies on: a restart at
+// the top of an even hour has the startup run and the cron run writing the same summary file.
+// SkipIfStillRunning would not cover it, since the startup run is not a cron job.
 func TestSummarizeSerializesOverlappingRuns(t *testing.T) {
 	original := summarizeDay
 	t.Cleanup(func() { summarizeDay = original })
@@ -107,8 +100,7 @@ func TestSummarizeSerializesOverlappingRuns(t *testing.T) {
 	}
 }
 
-// The scheduled jobs are the only reason this binary exists, and a missing one fails silently:
-// nothing errors, the work just never runs. Pin every schedule that must be registered.
+// A missing job fails silently: nothing errors, the work just never runs.
 func TestNewSchedulerRegistersAllJobs(t *testing.T) {
 	c, err := newScheduler(t.TempDir(), consts.SummarizeLookbackDays)
 	if err != nil {
@@ -143,9 +135,8 @@ func TestNewSchedulerRegistersAllJobs(t *testing.T) {
 	}
 }
 
-// TestServeReturnsAfterShutdownOnSignal pins the clean path: cancelling the context stops the
-// server and serve returns nil, so main goes on to drain the scheduler instead of exiting
-// non-zero on a stop that was asked for.
+// TestServeReturnsAfterShutdownOnSignal pins the clean path: serve returns nil, so main drains
+// the scheduler instead of exiting non-zero on a stop that was asked for.
 func TestServeReturnsAfterShutdownOnSignal(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -162,8 +153,8 @@ func TestServeReturnsAfterShutdownOnSignal(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- serve(ctx, server) }()
 
-	// Wait until the server is actually accepting, so the cancel below exercises Shutdown
-	// rather than racing ListenAndServe to the listener.
+	// Wait until it is accepting, so the cancel exercises Shutdown rather than racing
+	// ListenAndServe.
 	waitForListener(t, addr)
 	cancel()
 
@@ -177,9 +168,8 @@ func TestServeReturnsAfterShutdownOnSignal(t *testing.T) {
 	}
 }
 
-// TestServeReturnsListenError pins the failure path. A worker that cannot bind must not sit
-// there waiting for a signal that is not coming: serve has to hand the error straight back so
-// main can drain and exit non-zero.
+// TestServeReturnsListenError pins the failure path: a worker that cannot bind must not wait
+// for a signal that is not coming.
 func TestServeReturnsListenError(t *testing.T) {
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -202,8 +192,8 @@ func TestServeReturnsListenError(t *testing.T) {
 	}
 }
 
-// TestWaitForReportsTimeout covers the branch that decides whether main logs a half-applied
-// purge, which is otherwise only reachable by stalling a real job for jobDrainTimeout.
+// TestWaitForReportsTimeout covers the branch that is otherwise only reachable by stalling a
+// real job for jobDrainTimeout.
 func TestWaitForReportsTimeout(t *testing.T) {
 	closed := make(chan struct{})
 	close(closed)

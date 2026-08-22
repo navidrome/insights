@@ -906,9 +906,8 @@ func ExportChartsJSON(outputDir string) error {
 		return err
 	}
 
-	// Written atomically: cmd/process serves this very file at /api/charts, so a plain
-	// O_TRUNC rewrite would answer a request landing in the window with a truncated body,
-	// and a restart near 00:05 UTC can put two chart generations into that window at once.
+	// Atomic: cmd/process serves this file at /api/charts, and an O_TRUNC rewrite would answer
+	// a request landing in the window with a truncated body.
 	outputPath := filepath.Join(outputDir, consts.ChartsJSONFile)
 	if err := fsutil.WriteFileAtomic(outputPath, jsonData, consts.FilePermissions); err != nil {
 		return err

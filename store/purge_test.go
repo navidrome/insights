@@ -13,31 +13,23 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// baseFree is the free space the fake volume starts with in every spec: a round number well
-// clear of the byte counts the report tree contributes, so a target expressed as
-// baseFree + <bytes of some days> is met by exactly those days and no others.
+// baseFree is well clear of the report tree's size, so a target of baseFree + <some days> is
+// met by exactly those days.
 const baseFree = uint64(1) << 30
 
-// unreachableTarget is more free space than any spec's report tree can release, so the purge
-// runs until the minimum-retention floor stops it.
+// unreachableTarget is more than any spec's tree can release, so the retention floor stops the
+// purge.
 const unreachableTarget = uint64(1) << 40
 
-// fakeVolume simulates the volume holding the data folder. Free space starts at freeAtStart
-// and rises by exactly the bytes the purge frees, because every probe re-measures the report
-// tree on disk.
-//
-// That modelling is the point. A probe returning a constant below the target makes "delete
-// until the target is met" and "delete every day down to the retention floor" produce the same
-// result, and every spec here would pass against a purge that never re-checks and never stops
-// early.
+// fakeVolume re-measures the report tree on every probe, so free space rises by exactly what
+// the purge frees. A constant probe would make "stops at the target" untestable.
 type fakeVolume struct {
 	dir         string
 	freeAtStart uint64
 	usedAtStart uint64
 	probes      int
 	err         error
-	// failAfter is the probe number err starts being returned from, counting from 1. Zero
-	// means the very first probe fails.
+	// failAfter is the probe number err starts at, counting from 1. Zero fails the first.
 	failAfter int
 }
 
@@ -62,8 +54,7 @@ func (v *fakeVolume) install() *fakeVolume {
 	return v
 }
 
-// reportBytes is the size of everything under the report tree, lock file included. Only its
-// changes matter to fakeVolume, and the lock file's contribution is constant.
+// reportBytes is the size of the whole report tree, lock file included.
 func reportBytes(dir string) uint64 {
 	var total uint64
 	_ = filepath.WalkDir(filepath.Join(dir, consts.ReportsDir), func(_ string, d fs.DirEntry, err error) error {
@@ -78,10 +69,8 @@ func reportBytes(dir string) uint64 {
 	return total
 }
 
-// dayBytes is the size of one day's segments — what the volume gains when that day is purged.
-// It matches on the day's file prefix rather than going through DaySegmentPaths, so a segment
-// that exists in both compressed and plain form still counts once per file, exactly as the
-// purge deletes it.
+// dayBytes is what the volume gains when a day is purged. It matches on the file prefix, not
+// DaySegmentPaths, so both forms of a segment count, exactly as the purge deletes them.
 func dayBytes(dir string, date time.Time) uint64 {
 	GinkgoHelper()
 	entries, err := os.ReadDir(dayDir(dir, date))
@@ -98,9 +87,8 @@ func dayBytes(dir string, date time.Time) uint64 {
 	return total
 }
 
-// abandonedSegment writes a hidden segment of the given size into date's day directory: what an
-// earlier purge leaves behind when it hid a day's segments and then failed to unlink one. No
-// reader can see it, which is why the purge has to sweep it up itself.
+// abandonedSegment writes what an earlier purge leaves behind when it hid a day and then
+// failed to unlink one segment. No reader can see it, so only the purge can reclaim it.
 func abandonedSegment(dir string, date time.Time, size int) string {
 	GinkgoHelper()
 	name := purgingPrefix + "reports-" + date.Format(consts.DateFormat) + ".007" + consts.ReportFileExt
@@ -122,12 +110,8 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		today = time.Now().UTC().Truncate(24 * time.Hour)
 	})
 
-	// DATA_FOLDER is documented as defaulting to the current directory, and both ingest and
-	// summarization take "" to mean that. statfs is the one caller that cannot: Statfs("")
-	// fails with ENOENT, so retention would never run and the hourly job would log the same
-	// error forever. The real probe is used deliberately — a fake would not exercise it — with
-	// a target of one byte, so the purge returns on the free-space check without touching the
-	// tree the test process happens to be running in.
+	// Statfs("") fails with ENOENT, so retention would never run. The real probe on purpose,
+	// with a 1-byte target so the purge returns before touching anything.
 	It("probes the current directory when the data folder is empty", func() {
 		Expect(PurgeToFreeSpace("", 1, 7)).To(Succeed())
 	})
@@ -138,8 +122,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(PurgeToFreeSpace(dir, unreachableTarget, 7)).To(Succeed())
 	})
 
-	// Exactly at the target, not above it: this also pins the comparison to >=, so a purge that
-	// deletes a day whenever free space merely equals the target fails here.
+	// Exactly at the target, which pins the comparison to >=.
 	It("deletes nothing and logs nothing when free space already meets the target", func() {
 		writeDay(dir, daysAgo(30), "a")
 		writeDay(dir, daysAgo(20), "b")
@@ -169,8 +152,8 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(HasDay(dir, daysAgo(10))).To(BeTrue())
 	})
 
-	// The companion to the spec above: one day short of the target, so the purge has to keep
-	// going. Together they pin the stopping point to the target rather than to a fixed count.
+	// One day short of the target. With the spec above, this pins the stopping point to the
+	// target rather than to a fixed count.
 	It("keeps deleting days until the target is met", func() {
 		writeDay(dir, daysAgo(30), "a")
 		writeDay(dir, daysAgo(20), "b")
@@ -185,10 +168,8 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(HasDay(dir, daysAgo(10))).To(BeTrue())
 	})
 
-	// A day is one segment per writer session, and a segment may have been decompressed by
-	// hand. Purging a day takes all of them: the target here is exactly the day's total size,
-	// so leaving any segment behind both fails the count below and drags the purge into the
-	// next day.
+	// The target is exactly the day's total size, so any segment left behind drags the purge
+	// into the next day.
 	It("deletes every segment of a day, compressed or not", func() {
 		old := daysAgo(30)
 		writeDay(dir, old, "a")
@@ -206,8 +187,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(HasDay(dir, daysAgo(20))).To(BeTrue())
 	})
 
-	// The floor is absolute: daysAgo(7) survives a target that can never be met, and the operator
-	// is told, because at that point the disk is being filled by something else.
+	// The floor is absolute: daysAgo(7) survives a target that can never be met.
 	It("never deletes a day inside the minimum retention, and logs when the target stays unmet", func() {
 		writeDay(dir, daysAgo(8), "a")
 		writeDay(dir, daysAgo(7), "b")
@@ -255,9 +235,8 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(os.IsNotExist(err)).To(BeTrue())
 	})
 
-	// The reports root is where ingest creates its lock file and today's day directory, so
-	// pruning must stop above it. The lock file is removed here on purpose: while it exists the
-	// root is never empty, and this spec would hold no matter what pruning did.
+	// Pruning must stop above the reports root, where ingest keeps its lock file. The lock file
+	// is removed here so the spec fails if pruning goes too far.
 	It("keeps the reports root even when the purge leaves it empty", func() {
 		writeDay(dir, daysAgo(400), "b")
 		reportsDir := filepath.Join(dir, consts.ReportsDir)
@@ -281,9 +260,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	// The warning fires for any unmet target, and "nothing left to purge" is one of the ways to
-	// get there. Blaming retention then sends the operator to look at a knob that is not the
-	// problem — every day that could go, went.
+	// The warning must not blame retention when every day that could go, went.
 	It("does not blame the minimum retention when there is nothing left to purge", func() {
 		writeDay(dir, daysAgo(30), "a")
 		writeDay(dir, daysAgo(20), "b")
@@ -300,18 +277,11 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(out).ToNot(ContainSubstring("minimum retention"))
 	})
 
-	// A day deleted segment by segment leaves, on the first failure, a day that is half on disk
-	// and still reported by HasDay. A later `process -once -days N` backfill then rewrites that
-	// day's summary from the reports that survived and publishes the result — silent corruption
-	// of the charts, not just of the raw store.
-	//
-	// The assertion that matters is the on-disk state: an error alone would be returned by a
-	// purge that left the day exactly as broken.
+	// A day deleted segment by segment leaves half a day that HasDay still reports, which a
+	// backfill would then summarize. The assertion that matters is the on-disk state.
 	Describe("a segment that cannot be deleted", func() {
-		// failRemoving makes unlinking one segment fail — the way a single bad inode, or a file
-		// something else is holding, does — while its siblings delete normally. It matches on
-		// the segment's file name, not its full path, so the failure lands whether the purge
-		// unlinks the segment under its own name or under the one it hides it behind first.
+		// failRemoving fails one unlink while its siblings succeed. It matches on file name,
+		// not path, so it lands whether or not the purge hid the segment first.
 		failRemoving := func(segment string) {
 			GinkgoHelper()
 			name := filepath.Base(segment)
@@ -331,8 +301,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 			writeDay(dir, old, "b")
 			segments := DaySegmentPaths(dir, old)
 			Expect(segments).To(HaveLen(2))
-			// The second segment, so the first one is already deleted when the failure lands:
-			// that is the state that used to leave a visible, half-empty day behind.
+			// The second, so the first is already deleted when the failure lands.
 			failRemoving(segments[1])
 			newFakeVolume(dir, 0).install()
 
@@ -344,13 +313,11 @@ var _ = Describe("PurgeToFreeSpace", func() {
 				"a day that could not be fully deleted must not stay summarizable")
 			Expect(DaySegmentPaths(dir, old)).To(BeEmpty())
 			Expect(out).To(ContainSubstring(old.Format(consts.DateFormat)))
-			// One of its two segments is still on disk, hidden. Counting it as a day purged
-			// would put "Purged 1 report day(s)" in the log for a day that is still there.
+			// One of its two segments is still on disk, hidden.
 			Expect(out).ToNot(ContainSubstring("Purged 1 report day(s)"))
 		})
 
-		// The days after this one are on the same volume and would fail the same way, and each
-		// attempt is another day left in a state an operator has to be told about.
+		// Later days are on the same volume and would fail the same way.
 		It("stops the purge instead of moving on to the next day", func() {
 			writeDay(dir, daysAgo(30), "a")
 			writeDay(dir, daysAgo(20), "b")
@@ -362,9 +329,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 			Expect(HasDay(dir, daysAgo(20))).To(BeTrue())
 		})
 
-		// The old warning fired on any unmet target and blamed the only two causes it knew
-		// about. On a volume that refuses deletions it told an operator there were no report
-		// days left to delete while the entire tree was still there.
+		// The warning must not claim there is nothing left to delete when the tree is intact.
 		It("does not claim there are no report days left", func() {
 			writeDay(dir, daysAgo(30), "a")
 			failRemoving(DaySegmentPaths(dir, daysAgo(30))[0])
@@ -378,9 +343,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 			Expect(out).To(ContainSubstring("unlink boom"))
 		})
 
-		// Hidden segments are invisible to HasDay and to the day enumeration by design, which
-		// also means nothing else would ever reclaim their space — on a store whose retention
-		// is driven by free space, that is a leak that grows with every failure.
+		// Nothing but the purge can see a hidden segment, so nothing else reclaims its space.
 		It("is deleted by a later purge", func() {
 			old := daysAgo(30)
 			writeDay(dir, old, "a")
@@ -393,9 +356,8 @@ var _ = Describe("PurgeToFreeSpace", func() {
 			Expect(os.IsNotExist(statErr)).To(BeTrue(), "space no reader can see is space nothing else frees")
 		})
 
-		// The sweep frees space before the day loop runs, so the loop has to look at the volume
-		// again before it deletes anything. Without that it destroys a day of reports to reach
-		// a target the sweep had already reached.
+		// The loop must re-probe after the sweep, or it deletes a day to reach a target the
+		// sweep already met.
 		It("does not delete a day for space the sweep had already freed", func() {
 			old := daysAgo(30)
 			writeDay(dir, old, "a")
@@ -410,17 +372,13 @@ var _ = Describe("PurgeToFreeSpace", func() {
 			Expect(HasDay(dir, old)).To(BeTrue(), "the target was met before any day needed to go")
 		})
 
-		// The sweep deletes files no reader can see, and from a reader's point of view the
-		// writer's lock file is exactly that. Unlinking it under a live ingest breaks the
-		// single-writer invariant in silence: the next process to start creates a fresh lock
-		// file, takes it uncontested, and appends to the same day as the process still holding
-		// the old inode — two gzip streams interleaved into one segment.
+		// The lock file is invisible to readers too. Unlinking it under a live ingest lets a
+		// second process take a fresh lock and interleave two gzip streams into one segment.
 		It("never sweeps the writer lock file", func() {
 			old := daysAgo(30)
 			writeDay(dir, old, "a")
 			lock := filepath.Join(dir, consts.ReportsDir, lockFileName)
-			// The lock file has to be reachable by the sweep for this to mean anything, so the
-			// purge is put under pressure and given something to sweep.
+			// The sweep has to actually run for this to mean anything.
 			hidden := abandonedSegment(dir, old, 16)
 			newFakeVolume(dir, 0).install()
 
@@ -433,16 +391,15 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		})
 	})
 
-	// The other half of the two-pass deletion: when a segment cannot even be hidden, nothing
-	// has been unlinked yet, so the day has to come back whole rather than half-hidden.
+	// When a segment cannot even be hidden, nothing has been unlinked, so the day must come
+	// back whole.
 	It("restores a day it started to hide but could not delete", func() {
 		old := daysAgo(30)
 		writeDay(dir, old, "a")
 		writeDay(dir, old, "b")
 		segments := DaySegmentPaths(dir, old)
 		Expect(segments).To(HaveLen(2))
-		// A directory sitting on the name the purge hides the second segment under: renaming a
-		// file onto a directory fails, and by then the first segment is already hidden.
+		// Renaming onto a directory fails, and by then the first segment is already hidden.
 		blocked := filepath.Join(filepath.Dir(segments[1]), ".purging-"+filepath.Base(segments[1]))
 		Expect(os.Mkdir(blocked, consts.DirPermissions)).To(Succeed())
 		newFakeVolume(dir, 0).install()
@@ -459,8 +416,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(out).To(ContainSubstring(old.Format(consts.DateFormat)))
 	})
 
-	// An unreadable volume is not a licence to start deleting: without a free-space reading
-	// there is no way to know how much, if anything, needs to go.
+	// Without a free-space reading there is no way to know what, if anything, needs to go.
 	It("deletes nothing and reports the error when the space probe fails", func() {
 		writeDay(dir, daysAgo(30), "a")
 		vol := newFakeVolume(dir, 0)
@@ -471,9 +427,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(HasDay(dir, daysAgo(30))).To(BeTrue())
 	})
 
-	// When the probe fails mid-purge the only free-space reading in hand predates the deletions
-	// just made. Printing it would report a number that is both stale and, in the one case where
-	// the true value is unknown, presented as if it had been measured.
+	// After a failed probe the only reading in hand predates the deletions just made.
 	It("reports no free-space figure when the probe fails mid-purge", func() {
 		writeDay(dir, daysAgo(30), "a")
 		writeDay(dir, daysAgo(20), "b")
@@ -493,9 +447,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 })
 
 var _ = Describe("statfsFreeBytes", func() {
-	// The real probe, on a path that certainly exists. It only has to be a plausible, non-zero
-	// reading below the size of any real volume's total capacity — the exact number is compared
-	// against df by hand, since nothing here knows what the disk should have free.
+	// The real probe. It only has to be a plausible, non-zero reading.
 	It("reports a plausible free-space figure for a real path", func() {
 		free, err := statfsFreeBytes(GinkgoT().TempDir())
 

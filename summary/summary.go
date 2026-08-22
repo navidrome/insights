@@ -1,7 +1,9 @@
 package summary
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"math"
 	"reflect"
@@ -62,7 +64,11 @@ var segmentPathsFor = store.DaySegmentPaths
 func SummarizeData(dataFolder string, date time.Time) error {
 	// An empty list means the day was never recorded, which is not a day with no instances.
 	// A non-empty one is the baseline for the stability check before the save.
-	before := segmentPathsFor(dataFolder, date)
+	before, err := segmentPathsFor(dataFolder, date)
+	if err != nil {
+		log.Printf("Error listing report segments for %s: %s", date.Format(consts.DateFormat), err)
+		return err
+	}
 	if len(before) == 0 {
 		log.Printf("No report file for %s, skipping", date.Format(consts.DateFormat))
 		return nil
@@ -72,7 +78,10 @@ func SummarizeData(dataFolder string, date time.Time) error {
 	// day it arrived. Captured once, so a run spanning UTC midnight keeps one rule throughout.
 	live := date.UTC().Truncate(24 * time.Hour).Equal(time.Now().UTC().Truncate(24 * time.Hour))
 
-	rows, incomplete, err := store.LastPerID(dataFolder, date)
+	// The same snapshot the check below compares against. Letting LastPerID list the day for
+	// itself is a second listing, and a segment hidden between the two is invisible to the read
+	// and to the comparison alike.
+	rows, incomplete, err := store.LastPerIDFrom(before)
 	if err != nil {
 		log.Printf("Error reading reports: %s", err)
 		return err
@@ -145,6 +154,21 @@ func SummarizeData(dataFolder string, date time.Time) error {
 		activeUserValues = append(activeUserValues, data.Library.ActiveUsers)
 	}
 
+	// Before the zero-instance return, not after: a day whose every segment was unreadable also
+	// yields no instances, and reading that as "nothing to summarize" would let a backfill
+	// report success over a day it never managed to read.
+	if err := incomplete(); err != nil {
+		log.Printf("Skipping the summary for %s: %v, so the numbers are partial and would "+
+			"overwrite a correct summary", date.Format(consts.DateFormat), err)
+		// A segment that is simply gone is the purge taking the day mid-read. The day is on its
+		// way out, so declining to summarize it is the intended outcome rather than a failure
+		// worth failing a backfill over. Damage that is not a missing file still is.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+
 	if summary.NumInstances == 0 {
 		log.Printf("No data to summarize for %s", date.Format("2006-01-02"))
 		return nil
@@ -160,19 +184,15 @@ func SummarizeData(dataFolder string, date time.Time) error {
 	summary.LibraryStats = calcStats(libraryValues)
 	summary.ActiveUserStats = calcStats(activeUserValues)
 
-	// A segment that could not be opened, or that ended in unreadable data, is skipped by the
-	// reader so one damaged file does not hide the rest of the day. That is right for reading
-	// and wrong for publishing: the day summarizes to a smaller, entirely plausible number.
-	if err := incomplete(); err != nil {
-		log.Printf("Skipping the summary for %s: %v, so the numbers are partial and would "+
-			"overwrite a correct summary", date.Format(consts.DateFormat), err)
-		return err
-	}
-
 	// The purge runs in another process, so a backfill can read some of a day's segments and
 	// miss the rest, overwriting a correct summary with a wrong number. This narrows the window
 	// rather than closing it; closing it needs a cross-process lock.
-	if changed := unstableSegments(before, segmentPathsFor(dataFolder, date), live); len(changed) > 0 {
+	after, err := segmentPathsFor(dataFolder, date)
+	if err != nil {
+		log.Printf("Error re-listing report segments for %s: %s", date.Format(consts.DateFormat), err)
+		return err
+	}
+	if changed := unstableSegments(before, after, live); len(changed) > 0 {
 		log.Printf("Skipping the summary for %s: %d of its %d report segment(s) changed while "+
 			"it was being summarized (first: %s), so the numbers are partial and would overwrite a "+
 			"correct summary", date.Format(consts.DateFormat), len(changed), len(before), changed[0])

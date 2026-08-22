@@ -8,6 +8,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,6 +27,11 @@ const (
 	segmentIndexDigits = 3
 	maxSegmentIndex    = 999
 )
+
+// errSegmentsExhausted marks the one NextSegmentPath failure a writer cannot retry out of:
+// every later Append picks the same day and gets the same refusal until UTC midnight. A listing
+// that failed is not this, and heals on its own.
+var errSegmentsExhausted = errors.New("report segment indexes are exhausted for the day")
 
 // plainReportFileExt is the uncompressed variant of consts.ReportFileExt. Nothing writes it.
 // Readers accept it so a manually decompressed segment can be inspected in place.
@@ -79,13 +85,18 @@ func segmentIndex(name, prefix string) (int, bool) {
 	return index, true
 }
 
-// daySegments returns the index and path of every segment of date's UTC day, ordered by
-// index. A missing or unreadable day directory yields no segments.
-func daySegments(dataFolder string, date time.Time) ([]int, []string) {
+// daySegments returns the index and path of every segment of date's UTC day, ordered by index.
+// A missing directory yields no segments and no error: that day was never recorded. One that
+// exists but cannot be read is an error, because collapsing the two makes a broken permission
+// or a failing disk look exactly like a quiet day.
+func daySegments(dataFolder string, date time.Time) ([]int, []string, error) {
 	dir := dayDir(dataFolder, date)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, nil
+		if os.IsNotExist(err) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("listing %s: %w", dir, err)
 	}
 
 	prefix := segmentPrefix(date)
@@ -132,33 +143,41 @@ func daySegments(dataFolder string, date time.Time) ([]int, []string) {
 		indexes = append(indexes, s.index)
 		paths = append(paths, filepath.Join(dir, s.name))
 	}
-	return indexes, paths
+	return indexes, paths, nil
 }
 
 // DaySegmentPaths returns the existing report segments for the UTC day of date, oldest first,
-// one path per index. A segment that exists in both forms yields only the compressed one.
-func DaySegmentPaths(dataFolder string, date time.Time) []string {
-	_, paths := daySegments(dataFolder, date)
-	return paths
+// one path per index. A segment that exists in both forms yields only the compressed one. A day
+// that was never recorded is empty and no error; see daySegments.
+func DaySegmentPaths(dataFolder string, date time.Time) ([]string, error) {
+	_, paths, err := daySegments(dataFolder, date)
+	return paths, err
 }
 
 // NextSegmentPath returns the path a new writer session should create, one past the highest
 // index on disk. It creates nothing, and never reuses an index: order is write order.
 func NextSegmentPath(dataFolder string, date time.Time) (string, error) {
-	indexes, _ := daySegments(dataFolder, date)
+	indexes, _, err := daySegments(dataFolder, date)
+	if err != nil {
+		return "", err
+	}
 	next := 1
 	if len(indexes) > 0 {
 		next = indexes[len(indexes)-1] + 1
 	}
 	if next > maxSegmentIndex {
-		return "", fmt.Errorf("report segments for %s are past the highest index %d",
-			date.UTC().Format(consts.DateFormat), maxSegmentIndex)
+		return "", fmt.Errorf("report segments for %s are past the highest index %d: %w",
+			date.UTC().Format(consts.DateFormat), maxSegmentIndex, errSegmentsExhausted)
 	}
 	return segmentPath(dataFolder, date, next), nil
 }
 
 // HasDay reports whether any report segment exists for the UTC day of date. A day that was
 // never recorded must never be summarized as an empty one.
+//
+// A directory that cannot be listed reads as false here. Callers that must tell that apart from
+// an empty day use DaySegmentPaths, which returns the error.
 func HasDay(dataFolder string, date time.Time) bool {
-	return len(DaySegmentPaths(dataFolder, date)) > 0
+	paths, err := DaySegmentPaths(dataFolder, date)
+	return err == nil && len(paths) > 0
 }

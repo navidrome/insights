@@ -68,6 +68,10 @@ func SummarizeData(dataFolder string, date time.Time) error {
 		return nil
 	}
 
+	// Only the live day gains segments in normal operation: ingest files every report under the
+	// day it arrived. Captured once, so a run spanning UTC midnight keeps one rule throughout.
+	live := date.UTC().Truncate(24 * time.Hour).Equal(time.Now().UTC().Truncate(24 * time.Hour))
+
 	rows, err := store.LastPerID(dataFolder, date)
 	if err != nil {
 		log.Printf("Error reading reports: %s", err)
@@ -157,13 +161,12 @@ func SummarizeData(dataFolder string, date time.Time) error {
 	summary.ActiveUserStats = calcStats(activeUserValues)
 
 	// The purge runs in another process, so a backfill can read some of a day's segments and
-	// miss the rest, overwriting a correct summary with a wrong number. Only disappearing
-	// segments are unsafe: today's day gains segments routinely. This narrows the window
+	// miss the rest, overwriting a correct summary with a wrong number. This narrows the window
 	// rather than closing it; closing it needs a cross-process lock.
-	if gone := missingSegments(before, segmentPathsFor(dataFolder, date)); len(gone) > 0 {
-		log.Printf("Skipping the summary for %s: %d of its %d report segment(s) were deleted while "+
+	if changed := unstableSegments(before, segmentPathsFor(dataFolder, date), live); len(changed) > 0 {
+		log.Printf("Skipping the summary for %s: %d of its %d report segment(s) changed while "+
 			"it was being summarized (first: %s), so the numbers are partial and would overwrite a "+
-			"correct summary", date.Format(consts.DateFormat), len(gone), len(before), gone[0])
+			"correct summary", date.Format(consts.DateFormat), len(changed), len(before), changed[0])
 		return nil
 	}
 
@@ -175,8 +178,19 @@ func SummarizeData(dataFolder string, date time.Time) error {
 	return err
 }
 
-// missingSegments returns the paths of before that are no longer in after, in order. Paths
-// only in after are ignored; see the call site.
+// unstableSegments returns the paths that make a read unsafe to save. A segment that
+// disappeared always counts: a purge took it mid-read. One that appeared counts only when the
+// day is not live, where it means a purge rolled back a rename it had already made, and the
+// read in between saw a subset. On the live day an appearing segment is just an ingest restart.
+func unstableSegments(before, after []string, live bool) []string {
+	changed := missingSegments(before, after)
+	if !live {
+		changed = append(changed, missingSegments(after, before)...)
+	}
+	return changed
+}
+
+// missingSegments returns the paths of before that are no longer in after, in order.
 func missingSegments(before, after []string) []string {
 	current := make(map[string]struct{}, len(after))
 	for _, path := range after {

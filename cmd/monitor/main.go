@@ -54,11 +54,19 @@ type trackStats struct {
 }
 
 func run(dataFolder string, date time.Time) error {
-	if !store.HasDay(dataFolder, date) {
+	// Not HasDay: it reads a directory it cannot list as false, and reporting "no report file"
+	// for a day whose segments are merely unreachable sends an operator looking in the wrong
+	// place. This is the tool they reach for to find out which of the two it is.
+	paths, err := store.DaySegmentPaths(dataFolder, date)
+	if err != nil {
+		return fmt.Errorf("listing report segments for %s: %w", date.Format(consts.DateFormat), err)
+	}
+	if len(paths) == 0 {
 		return fmt.Errorf("no report file for %s", date.Format(consts.DateFormat))
 	}
 
-	rows, incomplete, err := store.LastPerID(dataFolder, date)
+	// The snapshot just listed, so the day reported on is the day checked.
+	rows, incomplete, err := store.LastPerIDFrom(paths)
 	if err != nil {
 		return fmt.Errorf("reading reports: %w", err)
 	}

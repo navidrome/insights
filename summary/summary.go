@@ -74,6 +74,20 @@ func SummarizeData(dataFolder string, date time.Time) error {
 		return nil
 	}
 
+	// A day a purge has started on is part visible at best, and the visible part reads as a
+	// complete, smaller day. No read-side check can notice that, because nothing changes while
+	// it is being read, so the hidden segments themselves are the signal.
+	pending, err := store.DayPurgePending(dataFolder, date)
+	if err != nil {
+		log.Printf("Error checking for an unfinished purge of %s: %s", date.Format(consts.DateFormat), err)
+		return err
+	}
+	if pending {
+		log.Printf("Skipping the summary for %s: a purge left part of it hidden, so what is "+
+			"readable is only part of the day", date.Format(consts.DateFormat))
+		return nil
+	}
+
 	// Only the live day gains segments in normal operation: ingest files every report under the
 	// day it arrived. Captured once, so a run spanning UTC midnight keeps one rule throughout.
 	live := date.UTC().Truncate(24 * time.Hour).Equal(time.Now().UTC().Truncate(24 * time.Hour))

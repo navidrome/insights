@@ -62,14 +62,18 @@ func main() {
 	defer cancel()
 
 	// A failure to bind falls through rather than exiting, so writer.Close below still
-	// releases the lock file.
+	// releases the lock file. The failure is remembered instead, and turned into a non-zero
+	// exit once the writer is closed.
+	var serveErr error
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		log.Printf("Listen: %s", err)
+		serveErr = err
 	} else {
 		log.Print("Starting Insights ingest on :" + port) //#nosec G706 -- port is from controlled env var or constant
 		if err := run(ctx, ln, newRouter(writer)); err != nil {
 			log.Printf("Serve: %s", err)
+			serveErr = err
 		}
 	}
 
@@ -82,6 +86,13 @@ func main() {
 		// status, rather than looking like a clean stop. The deferred cancels are skipped
 		// on purpose: the drain and writer.Close have already run.
 		log.Printf("Ingest stopped after an unrecoverable write error: %s", err)
+		os.Exit(1)
+	}
+	if serveErr != nil {
+		// Same reason as the write error above. A port already in use on redeploy, or an
+		// accept loop that broke, is the failure this exit status exists to report: without
+		// it the container stops with code 0 and reads as a clean shutdown everywhere.
+		log.Printf("Ingest stopped after a server error: %s", serveErr)
 		os.Exit(1)
 	}
 	log.Print("Ingest stopped")

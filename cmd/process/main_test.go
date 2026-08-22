@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,7 +61,7 @@ func TestCheckScheduledDays(t *testing.T) {
 // The bound is worth nothing unless the scheduled entry point actually applies it. startTasks
 // returns before starting anything here, so no cron outlives the test.
 func TestStartTasksRejectsLookbackPastThePurgeFloor(t *testing.T) {
-	err := startTasks(t.TempDir(), consts.MinRetentionDays)
+	_, err := startTasks(t.TempDir(), consts.MinRetentionDays)
 	if err == nil {
 		t.Fatal("startTasks accepted a lookback at the purge floor, want an error")
 	}
@@ -138,4 +141,89 @@ func TestNewSchedulerRegistersAllJobs(t *testing.T) {
 			t.Fatalf("got %d jobs firing at %s, want %d (all: %v)", got[at], at, n, got)
 		}
 	}
+}
+
+// TestServeReturnsAfterShutdownOnSignal pins the clean path: cancelling the context stops the
+// server and serve returns nil, so main goes on to drain the scheduler instead of exiting
+// non-zero on a stop that was asked for.
+func TestServeReturnsAfterShutdownOnSignal(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	server := &http.Server{Addr: addr, ReadHeaderTimeout: time.Second, Handler: http.NewServeMux()}
+
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, server) }()
+
+	// Wait until the server is actually accepting, so the cancel below exercises Shutdown
+	// rather than racing ListenAndServe to the listener.
+	waitForListener(t, addr)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("serve returned %v on the signal path, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("serve did not return after the context was cancelled")
+	}
+}
+
+// TestServeReturnsListenError pins the failure path. A worker that cannot bind must not sit
+// there waiting for a signal that is not coming: serve has to hand the error straight back so
+// main can drain and exit non-zero.
+func TestServeReturnsListenError(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = taken.Close() }()
+
+	server := &http.Server{Addr: taken.Addr().String(), ReadHeaderTimeout: time.Second, Handler: http.NewServeMux()}
+
+	done := make(chan error, 1)
+	go func() { done <- serve(context.Background(), server) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("serve returned nil for a port already in use, want the bind error")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("serve blocked on a port already in use instead of returning the bind error")
+	}
+}
+
+// TestWaitForReportsTimeout covers the branch that decides whether main logs a half-applied
+// purge, which is otherwise only reachable by stalling a real job for jobDrainTimeout.
+func TestWaitForReportsTimeout(t *testing.T) {
+	closed := make(chan struct{})
+	close(closed)
+	if !waitFor(closed, time.Second) {
+		t.Error("waitFor reported a timeout on an already-closed channel")
+	}
+	if waitFor(make(chan struct{}), 10*time.Millisecond) {
+		t.Error("waitFor reported success on a channel that never closes")
+	}
+}
+
+func waitForListener(t *testing.T, addr string) {
+	t.Helper()
+	for range 100 {
+		c, err := net.DialTimeout("tcp", addr, time.Second)
+		if err == nil {
+			_ = c.Close()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("server never started listening on %s", addr)
 }

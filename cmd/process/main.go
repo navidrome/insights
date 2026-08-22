@@ -4,17 +4,41 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/navidrome/insights/consts"
 	"github.com/robfig/cron/v3"
+)
+
+// shutdownTimeout bounds how long in-flight HTTP requests have to finish once a signal arrives.
+//
+// jobDrainTimeout bounds the wait that follows it, for a background job that was already
+// running when the signal came. That wait is the reason this handler exists at all: the purge
+// hides a day by renaming its segments aside and only then unlinks them, so a process killed
+// between the two leaves exactly the half-hidden day the two-pass purge exists to prevent —
+// HasDay still reports the day, a later backfill rewrites its summary from the segments that
+// survived, and the next purge unlinks the hidden half for good. A purge pass is a bounded run
+// of file renames and unlinks, so this budget is generous rather than tight.
+//
+// The startup pass in main is deliberately not waited on: summarize and chart export both end
+// in an atomic write, so a kill there costs a temp file, not a torn one.
+//
+// Both are variables, not constants, so the specs can drive the deadline path without spending
+// real time per run.
+var (
+	shutdownTimeout = 10 * time.Second
+	jobDrainTimeout = 30 * time.Second
 )
 
 func main() {
@@ -34,7 +58,13 @@ func main() {
 		return
 	}
 
-	if err := startTasks(dataFolder, *days); err != nil {
+	// Shut down cleanly so a job midway through rewriting the store is not cut in half. See
+	// jobDrainTimeout for what that costs when it happens.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	scheduler, err := startTasks(dataFolder, *days)
+	if err != nil {
 		log.Fatal(err)
 	}
 
@@ -64,8 +94,64 @@ func main() {
 		ReadHeaderTimeout: consts.ReadHeaderTimeout,
 		Handler:           r,
 	}
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatal("ListenAndServe: ", err)
+
+	serveErr := serve(ctx, server)
+	if serveErr != nil {
+		log.Printf("ListenAndServe: %s", serveErr)
+	}
+
+	// Only now stop the scheduler. Stop unschedules future runs and leaves the jobs already
+	// running alone; the context it returns is done once the last of them has returned.
+	if !waitFor(scheduler.Stop().Done(), jobDrainTimeout) {
+		log.Printf("Background jobs still running %s after the stop signal; exiting anyway, so "+
+			"a purge may be left half-applied", jobDrainTimeout)
+	}
+
+	if serveErr != nil {
+		// Exit non-zero so a port already in use on redeploy is visible in `docker compose ps`
+		// and in the exit status, rather than looking like a clean stop.
+		os.Exit(1)
+	}
+	log.Print("Process worker stopped")
+}
+
+// serve runs server until ctx is cancelled, then gives in-flight requests shutdownTimeout to
+// finish. It returns nil for the clean path, so only a real failure reaches the exit status.
+//
+// A ListenAndServe failure returns straight away rather than waiting on the signal: main still
+// has a scheduler to drain, and a worker that cannot bind must not sit there until somebody
+// stops it by hand.
+func serve(ctx context.Context, server *http.Server) error {
+	done := make(chan struct{})
+	go func() { //#nosec G118 -- the shutdown deadline must not derive from ctx: ctx is already cancelled here, so a derived context would expire immediately and abort the drain
+		defer close(done)
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Error shutting down server, closing connections: %s", err)
+			_ = server.Close()
+		}
+	}()
+
+	err := server.ListenAndServe()
+	if errors.Is(err, http.ErrServerClosed) {
+		// The listener closed because Shutdown started. Wait for it to finish.
+		<-done
+		return nil
+	}
+	return err
+}
+
+// waitFor reports whether c closed before timeout expired.
+func waitFor(c <-chan struct{}, timeout time.Duration) bool {
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-c:
+		return true
+	case <-t.C:
+		return false
 	}
 }
 
@@ -104,17 +190,18 @@ func checkScheduledDays(days int) error {
 	return nil
 }
 
-// startTasks schedules the background jobs and starts running them.
-func startTasks(dataFolder string, days int) error {
+// startTasks schedules the background jobs and starts running them. It returns the running
+// scheduler so main can stop it and wait out whatever job was in flight at the time.
+func startTasks(dataFolder string, days int) (*cron.Cron, error) {
 	if err := checkScheduledDays(days); err != nil {
-		return err
+		return nil, err
 	}
 	c, err := newScheduler(dataFolder, days)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.Start()
-	return nil
+	return c, nil
 }
 
 // newScheduler registers every background job on a UTC cron, without starting it.

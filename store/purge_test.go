@@ -135,7 +135,24 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(out).To(BeEmpty())
 		Expect(HasDay(dir, daysAgo(30))).To(BeTrue())
 		Expect(HasDay(dir, daysAgo(20))).To(BeTrue())
-		Expect(vol.probes).To(Equal(1), "it should not even enumerate the tree")
+		Expect(vol.probes).To(Equal(1), "one probe, after the sweep found nothing")
+	})
+
+	// The sweep is the only thing that reclaims a hidden segment, and a day left half hidden by
+	// a kill mid-purge stays half hidden until it runs. Gating it on disk pressure meant a
+	// broken day sat there, re-read by every backfill, until the volume happened to fill up.
+	It("sweeps segments abandoned by an earlier purge even when there is no disk pressure", func() {
+		writeDay(dir, daysAgo(30), "a")
+		orphan := abandonedSegment(dir, daysAgo(30), 4096)
+		newFakeVolume(dir, baseFree).install()
+
+		out := captureLog(func() {
+			Expect(PurgeToFreeSpace(dir, baseFree, 7)).To(Succeed())
+		})
+
+		Expect(orphan).ToNot(BeAnExistingFile())
+		Expect(out).To(ContainSubstring("abandoned by an earlier purge"))
+		Expect(HasDay(dir, daysAgo(30))).To(BeTrue(), "the visible half must not be touched")
 	})
 
 	It("deletes the oldest day first and stops as soon as the target is met", func() {

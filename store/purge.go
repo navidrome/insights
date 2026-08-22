@@ -41,19 +41,11 @@ func statfsFreeBytes(path string) (uint64, error) {
 
 // PurgeToFreeSpace deletes whole report days, oldest first, until the volume holding dataFolder
 // has minFreeBytes free. It keeps every day younger than minRetentionDays, warns when it stops
-// short, and is silent when there is room. dataFolder is defaulted because statfs, unlike
-// filepath.Join, resolves "" to ENOENT.
+// short, and is silent when there is room and nothing to sweep. dataFolder is defaulted because
+// statfs, unlike filepath.Join, resolves "" to ENOENT.
 func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays int) error {
 	if dataFolder == "" {
 		dataFolder = "."
-	}
-
-	free, err := freeBytes(dataFolder)
-	if err != nil {
-		return err
-	}
-	if free >= minFreeBytes {
-		return nil
 	}
 
 	baseDir := filepath.Join(dataFolder, consts.ReportsDir)
@@ -62,7 +54,9 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 		return err
 	}
 
-	// Segments an earlier purge hid but could not unlink. Nothing else will ever reclaim them.
+	// Segments an earlier purge hid but could not unlink. This sweep is the only thing that
+	// reclaims them, and it runs before the free-space check on purpose: a day left half hidden
+	// by a kill must be finished within the hour, not whenever the disk next fills up.
 	var swept int
 	for _, path := range abandoned {
 		if err := removeFile(path); err != nil { //#nosec G122 -- path comes from a controlled directory walk under DATA_FOLDER
@@ -73,17 +67,18 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 		log.Printf("Deleted segment %s abandoned by an earlier purge", path) //#nosec G706 -- path comes from a controlled directory walk
 	}
 
-	// The sweep may already have met the target. Without this re-probe the loop below deletes a
-	// whole day that did not need to go.
-	if swept > 0 {
-		free, err = freeBytes(dataFolder)
-		if err != nil {
-			return err
-		}
-		if free >= minFreeBytes {
+	// Probed after the sweep, so the day loop below never deletes a day to reach a target the
+	// sweep already met.
+	free, err := freeBytes(dataFolder)
+	if err != nil {
+		return err
+	}
+	if free >= minFreeBytes {
+		if swept > 0 {
 			// Files went away, so a day directory may now be empty.
 			return pruneEmptyDirs(baseDir)
 		}
+		return nil
 	}
 
 	// The oldest day kept regardless of pressure.

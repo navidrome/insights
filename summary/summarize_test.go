@@ -207,6 +207,28 @@ var _ = Describe("SummarizeData", func() {
 			Expect(SummarizeData(dir, day)).ToNot(Succeed())
 		})
 
+		// A purge deleting one segment must not excuse damage to another. errors.Is on a join
+		// answers true as soon as one constituent matches, so the benign case has to be "every
+		// failure was a missing file", not "one of them was".
+		It("fails when a missing segment and a damaged one land in the same read", func() {
+			writeReports("a", "b")
+			writeReports("c") // a second writer session, so the day has two segments
+
+			paths, err := store.DaySegmentPaths(dir, day)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(paths).To(HaveLen(2))
+
+			// The baseline lists both, then one is taken by a purge and the other turns out to
+			// be unreadable.
+			interpose(func(listed []string) {
+				Expect(listed).To(HaveLen(2))
+				Expect(os.Remove(paths[0])).To(Succeed())
+				Expect(os.WriteFile(paths[1], []byte("not gzip at all\n"), 0o600)).To(Succeed())
+			})
+
+			Expect(SummarizeData(dir, day)).ToNot(Succeed(), "-once has to see the damage")
+		})
+
 		// beforeCall runs during the n-th listing, before it reads the directory, so a spec can
 		// change the day between the read and the check rather than only before the read.
 		beforeCall := func(n int, during func()) {

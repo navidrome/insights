@@ -163,7 +163,7 @@ func SummarizeData(dataFolder string, date time.Time) error {
 		// A segment that is simply gone is the purge taking the day mid-read. The day is on its
 		// way out, so declining to summarize it is the intended outcome rather than a failure
 		// worth failing a backfill over. Damage that is not a missing file still is.
-		if errors.Is(err, fs.ErrNotExist) {
+		if onlyMissing(err) {
 			return nil
 		}
 		return err
@@ -205,6 +205,30 @@ func SummarizeData(dataFolder string, date time.Time) error {
 		log.Printf("Error saving summary: %s", err)
 	}
 	return err
+}
+
+// onlyMissing reports whether every failure in err is a segment that is simply gone.
+//
+// It walks the joined errors itself rather than asking errors.Is, which answers true as soon as
+// one constituent matches: a purge deleting a segment would then excuse real damage to another
+// segment of the same day, and the backfill that hit both would report success.
+func onlyMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		subs := joined.Unwrap()
+		if len(subs) == 0 {
+			return false
+		}
+		for _, sub := range subs {
+			if !onlyMissing(sub) {
+				return false
+			}
+		}
+		return true
+	}
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // unstableSegments returns the paths that make a read unsafe to save. A segment that

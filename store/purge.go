@@ -23,6 +23,41 @@ var reportFileRegex = regexp.MustCompile(`^reports-(\d{4}-\d{2}-\d{2})\.(\d{3})\
 // it keeps a failed deletion from leaving half a day on disk and still summarizable.
 const purgingPrefix = ".purging-"
 
+// DayPurgePending reports whether any segment of date's UTC day is hidden by a purge that has
+// not finished.
+//
+// Such a day is part visible at best, and the part that is visible reads as a complete, smaller
+// day: nothing about it looks wrong to a reader. Every way a day ends up in that state is
+// self-healing, since resumeInterrupted finishes it on the next hourly run, but the window is
+// an hour wide and a backfill inside it would publish the smaller number.
+func DayPurgePending(dataFolder string, date time.Time) (bool, error) {
+	dir := dayDir(dataFolder, date)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("listing %s: %w", dir, err)
+	}
+
+	prefix := segmentPrefix(date)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		rest, ok := strings.CutPrefix(e.Name(), purgingPrefix)
+		if !ok {
+			continue
+		}
+		// Matched against this day's prefix, so a neighbouring day being purged does not
+		// suspend summarization of one that is whole.
+		if _, isSegment := segmentIndex(rest, prefix); isSegment {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // freeBytes is a variable so tests can simulate disk pressure.
 var freeBytes = statfsFreeBytes
 

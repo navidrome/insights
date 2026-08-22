@@ -100,15 +100,17 @@ func run(dataFolder string, date time.Time) error {
 		}
 	}
 
-	if s.numInstances == 0 {
-		return fmt.Errorf("no data found for %s", date.Format(consts.DateFormat))
+	// Before the zero-instance check, not after: a day whose every segment was unreadable also
+	// yields no instances, and "no data found" is the one answer that is certainly wrong there.
+	// The reader skips what it cannot read, so the counts would otherwise look like a smaller
+	// day rather than a partial one.
+	if err := incomplete(); err != nil {
+		return fmt.Errorf("reports for %s are incomplete, the counts would be wrong: %w",
+			date.Format(consts.DateFormat), err)
 	}
 
-	// The reader skips a segment it cannot read, so the counts below would otherwise look like
-	// a smaller day rather than a partial one.
-	if err := incomplete(); err != nil {
-		return fmt.Errorf("reports for %s are incomplete, the counts below would be wrong: %w",
-			date.Format(consts.DateFormat), err)
+	if s.numInstances == 0 {
+		return fmt.Errorf("no data found for %s", date.Format(consts.DateFormat))
 	}
 
 	s.trackStats = calcTrackStats(trackValues)

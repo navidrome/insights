@@ -229,6 +229,33 @@ var _ = Describe("SummarizeData", func() {
 			Expect(SummarizeData(dir, day)).ToNot(Succeed(), "-once has to see the damage")
 		})
 
+		// A purge that fails a rename and then fails to restore what it already hid leaves the
+		// day part visible, and so does a kill between two renames. Nothing about the visible
+		// part looks wrong while it is being read, so the hidden segments have to be the signal.
+		It("keeps the good summary when a purge left part of the day hidden", func() {
+			writeReports("a", "b")
+			writeReports("c") // a second writer session, so the day has two segments
+			Expect(SummarizeData(dir, day)).To(Succeed())
+
+			summaries, err := GetSummaries()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)))
+
+			paths, err := store.DaySegmentPaths(dir, day)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(paths).To(HaveLen(2))
+			hidden := filepath.Join(filepath.Dir(paths[0]), ".purging-"+filepath.Base(paths[0]))
+			Expect(os.Rename(paths[0], hidden)).To(Succeed())
+
+			Expect(SummarizeData(dir, day)).To(Succeed(), "an unfinished purge is not a failure")
+
+			summaries, err = GetSummaries()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(summaries).To(HaveLen(1))
+			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)),
+				"the visible half read cleanly and looked like a smaller day")
+		})
+
 		// beforeCall runs during the n-th listing, before it reads the directory, so a spec can
 		// change the day between the read and the check rather than only before the read.
 		beforeCall := func(n int, during func()) {

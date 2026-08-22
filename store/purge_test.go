@@ -466,6 +466,42 @@ var _ = Describe("PurgeToFreeSpace", func() {
 	})
 })
 
+var _ = Describe("DayPurgePending", func() {
+	var dir string
+	var day time.Time
+
+	BeforeEach(func() {
+		dir = GinkgoT().TempDir()
+		day = time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -30)
+	})
+
+	It("is false for a day nobody is purging", func() {
+		writeDay(dir, day, "a")
+
+		Expect(DayPurgePending(dir, day)).To(BeFalse())
+	})
+
+	It("is false for a day that was never recorded", func() {
+		Expect(DayPurgePending(dir, day)).To(BeFalse())
+	})
+
+	It("is true while one of the day's segments is hidden", func() {
+		writeDay(dir, day, "a")
+		abandonedSegment(dir, day, 8)
+
+		Expect(DayPurgePending(dir, day)).To(BeTrue())
+	})
+
+	// The hidden segments share a directory with every other day of the month, so matching on
+	// the prefix alone would suspend summarization across the whole month.
+	It("is false when the hidden segment belongs to another day of the same month", func() {
+		writeDay(dir, day, "a")
+		abandonedSegment(dir, day.AddDate(0, 0, -1), 8)
+
+		Expect(DayPurgePending(dir, day)).To(BeFalse())
+	})
+})
+
 var _ = Describe("statfsFreeBytes", func() {
 	// The real probe. It only has to be a plausible, non-zero reading.
 	It("reports a plausible free-space figure for a real path", func() {

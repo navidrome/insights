@@ -95,13 +95,13 @@ var _ = Describe("SummarizeData", func() {
 			GinkgoHelper()
 			prev := segmentPathsFor
 			first := true
-			segmentPathsFor = func(dataFolder string, date time.Time) []string {
-				paths := prev(dataFolder, date)
+			segmentPathsFor = func(dataFolder string, date time.Time) ([]string, error) {
+				paths, err := prev(dataFolder, date)
 				if first {
 					first = false
 					during(paths)
 				}
-				return paths
+				return paths, err
 			}
 			DeferCleanup(func() { segmentPathsFor = prev })
 		}
@@ -141,7 +141,7 @@ var _ = Describe("SummarizeData", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)))
 
-			paths := store.DaySegmentPaths(dir, day)
+			paths, _ := store.DaySegmentPaths(dir, day)
 			Expect(paths).To(HaveLen(2))
 			Expect(os.WriteFile(paths[0], []byte("not gzip at all\n"), 0o600)).To(Succeed())
 
@@ -154,13 +154,66 @@ var _ = Describe("SummarizeData", func() {
 				"a damaged segment overwrote a correct summary")
 		})
 
+		// The reviewer's rollback scenario, end to end. The baseline lists the whole day, the
+		// purge hides a segment straight after, and its rename fails so the name is restored
+		// before the final check. A run that lists the day again for the read sees only the
+		// survivor, reads it cleanly, and finds a segment set identical to the baseline.
+		It("keeps the good summary when a hidden segment is restored before the check", func() {
+			writeReports("a", "b")
+			writeReports("c") // a second writer session, so the day has two segments
+			Expect(SummarizeData(dir, day)).To(Succeed())
+
+			summaries, err := GetSummaries()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)))
+
+			paths, err := store.DaySegmentPaths(dir, day)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(paths).To(HaveLen(2))
+			hidden := filepath.Join(filepath.Dir(paths[0]), ".purging-"+filepath.Base(paths[0]))
+
+			prev := segmentPathsFor
+			calls := 0
+			segmentPathsFor = func(dataFolder string, date time.Time) ([]string, error) {
+				calls++
+				if calls == 2 {
+					Expect(os.Rename(hidden, paths[0])).To(Succeed()) // the rename failed, roll back
+				}
+				out, listErr := prev(dataFolder, date)
+				if calls == 1 {
+					Expect(os.Rename(paths[0], hidden)).To(Succeed()) // hidden right after the baseline
+				}
+				return out, listErr
+			}
+			DeferCleanup(func() { segmentPathsFor = prev })
+
+			Expect(SummarizeData(dir, day)).To(Succeed())
+
+			summaries, err = GetSummaries()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)),
+				"the read covered one segment while the check saw both")
+		})
+
+		// A day whose every segment is unreadable yields no instances, so a verdict checked
+		// after the zero-instance return would never be reached and -once would report success.
+		It("fails rather than reporting nothing to summarize when the day cannot be read", func() {
+			writeReports("a")
+
+			paths, err := store.DaySegmentPaths(dir, day)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(os.WriteFile(paths[0], []byte("not gzip at all\n"), 0o600)).To(Succeed())
+
+			Expect(SummarizeData(dir, day)).ToNot(Succeed())
+		})
+
 		// beforeCall runs during the n-th listing, before it reads the directory, so a spec can
 		// change the day between the read and the check rather than only before the read.
 		beforeCall := func(n int, during func()) {
 			GinkgoHelper()
 			prev := segmentPathsFor
 			calls := 0
-			segmentPathsFor = func(dataFolder string, date time.Time) []string {
+			segmentPathsFor = func(dataFolder string, date time.Time) ([]string, error) {
 				calls++
 				if calls == n {
 					during()
@@ -171,7 +224,12 @@ var _ = Describe("SummarizeData", func() {
 		}
 
 		// Must stay allowed on the live day: ingest opens a new segment on every restart, so
-		// today gains segments as a matter of course.
+		// today gains segments as a matter of course and a run that refused to save on one
+		// would never summarize the current day at all.
+		//
+		// The saved number comes from the snapshot the run took, not from the day as it stands
+		// when the run ends. The segment that appeared is picked up by the next run two hours
+		// later, which is the price of reading one snapshot instead of re-listing mid-read.
 		It("still saves when a segment appears on the live day", func() {
 			today := time.Now().UTC().Truncate(24 * time.Hour)
 			writeReportsOn(today, "a")
@@ -186,7 +244,7 @@ var _ = Describe("SummarizeData", func() {
 			summaries, err := GetSummaries()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries).To(HaveLen(1))
-			Expect(summaries[0].Data.NumInstances).To(Equal(int64(2)))
+			Expect(summaries[0].Data.NumInstances).To(Equal(int64(1)), "the snapshot held one segment")
 		})
 
 		// An old day never gains a segment on its own, so one appearing means a purge hid
@@ -202,7 +260,7 @@ var _ = Describe("SummarizeData", func() {
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)))
 
 			// The purge hides the first segment, so the read below sees only "c".
-			paths := store.DaySegmentPaths(dir, day)
+			paths, _ := store.DaySegmentPaths(dir, day)
 			Expect(paths).To(HaveLen(2))
 			hidden := filepath.Join(filepath.Dir(paths[0]), ".purging-"+filepath.Base(paths[0]))
 			Expect(os.Rename(paths[0], hidden)).To(Succeed())

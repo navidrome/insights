@@ -3,6 +3,8 @@ package store
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/navidrome/insights/consts"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -86,6 +88,18 @@ var _ = Describe("Record", func() {
 	Describe("DaySegmentPaths", func() {
 		It("returns nothing when the day has no segments", func() {
 			Expect(DaySegmentPaths(dir, testDay)).To(BeEmpty())
+		})
+
+		// A directory that cannot be listed must not read as a day that was never recorded.
+		// SummarizeData skips a missing day silently, so collapsing the two turns a broken
+		// permission or a failing disk into a quiet no-op a backfill reports as success.
+		It("returns an error when the day directory cannot be listed", func() {
+			blocked := dayDir(dir, testDay)
+			Expect(os.MkdirAll(filepath.Dir(blocked), consts.DirPermissions)).To(Succeed())
+			Expect(os.WriteFile(blocked, []byte("not a directory"), consts.FilePermissions)).To(Succeed())
+
+			_, err := DaySegmentPaths(dir, testDay)
+			Expect(err).To(HaveOccurred())
 		})
 
 		It("returns segments in ascending index order", func() {

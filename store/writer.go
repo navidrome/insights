@@ -3,6 +3,7 @@ package store
 import (
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -160,10 +161,14 @@ func (w *Writer) openFor(t time.Time) error {
 	}
 
 	path, err := NextSegmentPath(w.folder, t)
-	if err != nil {
+	if errors.Is(err, errSegmentsExhausted) {
 		// Every later Append gets the same refusal until UTC midnight. A restart does not free
 		// indexes, so this trades a silent 500-forever outage for a visible crash-loop.
 		return w.fail(err)
+	}
+	if err != nil {
+		// A listing that failed, which the next Append retries like any other creation error.
+		return w.creationFailed(fmt.Errorf("finding the next segment: %w", err))
 	}
 	if err := os.MkdirAll(filepath.Dir(path), consts.DirPermissions); err != nil {
 		return w.creationFailed(fmt.Errorf("creating day dir: %w", err))

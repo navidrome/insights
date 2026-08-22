@@ -47,7 +47,7 @@ func readSegments(dataFolder string, date time.Time, tolerateOpenMember bool) []
 	}
 
 	var lines []string
-	for _, path := range DaySegmentPaths(dataFolder, date) {
+	for _, path := range mustPaths(dataFolder, date) {
 		f, err := os.Open(path) //#nosec G304 -- test-only path from the suite's TempDir
 		Expect(err).ToNot(HaveOccurred())
 		gz, err := gzip.NewReader(f)
@@ -372,7 +372,9 @@ var _ = Describe("Writer", func() {
 				Expect(err).ToNot(HaveOccurred())
 				defer func() { _ = w.Close() }()
 
-				Expect(w.Append(dataFor("a"), testDay)).To(MatchError(ContainSubstring("creating day dir")))
+				// A blocked month directory now fails at the listing, before MkdirAll gets a
+				// turn. It is still a creation failure, and still subject to the grace window.
+				Expect(w.Append(dataFor("a"), testDay)).To(MatchError(ContainSubstring("finding the next segment")))
 				Expect(w.Fatal()).ToNot(BeClosed(), "one failure is a blip, not a verdict")
 				Expect(w.Err()).ToNot(HaveOccurred())
 

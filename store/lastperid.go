@@ -30,15 +30,26 @@ type winner struct {
 // LastPerID yields the newest record per instance, ties broken by later position. Two passes,
 // because the winner may be the last line and the decoded records do not fit in memory: pass 1
 // keeps a (position, timestamp) per instance, pass 2 decodes only the winners.
+// LastPerID takes one snapshot of the day and reads it twice. Pass 2 finds its winners by
+// position in the concatenated day, so a segment that leaves the listing between the passes
+// would shift every later position onto a different record rather than merely removing its own.
 func LastPerID(dataFolder string, date time.Time) (iter.Seq[insights.Data], func() error, error) {
-	// One snapshot, both passes. Pass 2 finds its winners by position in the concatenated day,
-	// so a segment that leaves the listing between the passes would shift every position after
-	// it onto a different record rather than merely removing its own.
-	paths := DaySegmentPaths(dataFolder, date)
+	paths, err := DaySegmentPaths(dataFolder, date)
+	if err != nil {
+		return nil, nil, err
+	}
 	if len(paths) == 0 {
 		return nil, nil, fmt.Errorf("no report segment for %s", date.UTC().Format(consts.DateFormat))
 	}
+	return LastPerIDFrom(paths)
+}
 
+// LastPerIDFrom is LastPerID over a snapshot the caller already holds.
+//
+// Callers that also compare the day's segments before and after the read must use this: a
+// snapshot of their own plus a second one taken in here is two listings again, and a segment
+// hidden between them is invisible to both the read and the comparison.
+func LastPerIDFrom(paths []string) (iter.Seq[insights.Data], func() error, error) {
 	positions, pass1 := winningPositions(paths)
 
 	var pass2 error

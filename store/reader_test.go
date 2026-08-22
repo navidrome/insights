@@ -40,7 +40,7 @@ func collectIDs(seq iter.Seq[Record]) []string {
 // truncate lops n bytes off the day's last segment, as an unclean shutdown would.
 func truncate(dir string, date time.Time, n int64) {
 	GinkgoHelper()
-	paths := DaySegmentPaths(dir, date)
+	paths, _ := DaySegmentPaths(dir, date)
 	Expect(paths).ToNot(BeEmpty())
 	path := paths[len(paths)-1]
 	fi, err := os.Stat(path)

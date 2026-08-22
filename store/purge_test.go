@@ -242,7 +242,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 	It("removes directories left empty by the purge", func() {
 		old := daysAgo(400) // a different year
 		writeDay(dir, old, "b")
-		monthDir := filepath.Dir(DaySegmentPaths(dir, old)[0])
+		monthDir := filepath.Dir(mustPaths(dir, old)[0])
 		yearDir := filepath.Dir(monthDir)
 		newFakeVolume(dir, 0).install()
 
@@ -318,7 +318,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 			old := daysAgo(30)
 			writeDay(dir, old, "a")
 			writeDay(dir, old, "b")
-			segments := DaySegmentPaths(dir, old)
+			segments, _ := DaySegmentPaths(dir, old)
 			Expect(segments).To(HaveLen(2))
 			// The second, so the first is already deleted when the failure lands.
 			failRemoving(segments[1])
@@ -340,7 +340,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		It("stops the purge instead of moving on to the next day", func() {
 			writeDay(dir, daysAgo(30), "a")
 			writeDay(dir, daysAgo(20), "b")
-			failRemoving(DaySegmentPaths(dir, daysAgo(30))[0])
+			failRemoving(mustPaths(dir, daysAgo(30))[0])
 			newFakeVolume(dir, 0).install()
 
 			Expect(PurgeToFreeSpace(dir, unreachableTarget, 7)).ToNot(Succeed())
@@ -351,7 +351,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		// The warning must not claim there is nothing left to delete when the tree is intact.
 		It("does not claim there are no report days left", func() {
 			writeDay(dir, daysAgo(30), "a")
-			failRemoving(DaySegmentPaths(dir, daysAgo(30))[0])
+			failRemoving(mustPaths(dir, daysAgo(30))[0])
 			newFakeVolume(dir, 0).install()
 
 			var err error
@@ -417,7 +417,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		old := daysAgo(30)
 		writeDay(dir, old, "a")
 		writeDay(dir, old, "b")
-		segments := DaySegmentPaths(dir, old)
+		segments, _ := DaySegmentPaths(dir, old)
 		Expect(segments).To(HaveLen(2))
 		// Renaming onto a directory fails, and by then the first segment is already hidden.
 		blocked := filepath.Join(filepath.Dir(segments[1]), ".purging-"+filepath.Base(segments[1]))

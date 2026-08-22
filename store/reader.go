@@ -25,7 +25,10 @@ import (
 // in full. Anything derived from the whole day must check it: a skipped segment does not look
 // like an error downstream, it looks like a smaller day.
 func readLines(dataFolder string, date time.Time) (iter.Seq[[]byte], func() error, error) {
-	paths := DaySegmentPaths(dataFolder, date)
+	paths, err := DaySegmentPaths(dataFolder, date)
+	if err != nil {
+		return nil, nil, err
+	}
 	if len(paths) == 0 {
 		return nil, nil, fmt.Errorf("no report segment for %s", date.UTC().Format(consts.DateFormat))
 	}

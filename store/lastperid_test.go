@@ -171,7 +171,7 @@ var _ = Describe("LastPerID", func() {
 		seq, incomplete, err := LastPerID(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
-		paths := DaySegmentPaths(dir, testDay)
+		paths, _ := DaySegmentPaths(dir, testDay)
 		Expect(paths).To(HaveLen(2))
 		Expect(os.Remove(paths[0])).To(Succeed())
 

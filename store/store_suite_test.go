@@ -17,6 +17,15 @@ func TestStore(t *testing.T) {
 	RunSpecs(t, "Store Suite")
 }
 
+// mustPaths is DaySegmentPaths for the specs that only care about the paths. A listing error
+// is a broken fixture, so it fails the spec rather than being threaded through every call.
+func mustPaths(dataFolder string, date time.Time) []string {
+	GinkgoHelper()
+	paths, err := DaySegmentPaths(dataFolder, date)
+	Expect(err).ToNot(HaveOccurred())
+	return paths
+}
+
 // testDay is the fixed UTC day used across the suite.
 var testDay = time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 
@@ -32,7 +41,7 @@ func dataFor(id string) insights.Data {
 // appendPlainLine appends a raw line as its own gzip member, as a hand-edited tail looks.
 func appendPlainLine(dataFolder string, date time.Time, line string) {
 	GinkgoHelper()
-	paths := DaySegmentPaths(dataFolder, date)
+	paths, _ := DaySegmentPaths(dataFolder, date)
 	Expect(paths).ToNot(BeEmpty())
 	f, err := os.OpenFile(paths[len(paths)-1], os.O_WRONLY|os.O_APPEND, consts.FilePermissions) //#nosec G304 -- test-only path from the suite's TempDir
 	Expect(err).ToNot(HaveOccurred())

@@ -3,11 +3,13 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"log"
 	"slices"
 	"time"
 
+	"github.com/navidrome/insights/consts"
 	"github.com/navidrome/navidrome/core/metrics/insights"
 )
 
@@ -29,10 +31,15 @@ type winner struct {
 // because the winner may be the last line and the decoded records do not fit in memory: pass 1
 // keeps a (position, timestamp) per instance, pass 2 decodes only the winners.
 func LastPerID(dataFolder string, date time.Time) (iter.Seq[insights.Data], func() error, error) {
-	positions, pass1, err := winningPositions(dataFolder, date)
-	if err != nil {
-		return nil, nil, err
+	// One snapshot, both passes. Pass 2 finds its winners by position in the concatenated day,
+	// so a segment that leaves the listing between the passes would shift every position after
+	// it onto a different record rather than merely removing its own.
+	paths := DaySegmentPaths(dataFolder, date)
+	if len(paths) == 0 {
+		return nil, nil, fmt.Errorf("no report segment for %s", date.UTC().Format(consts.DateFormat))
 	}
+
+	positions, pass1 := winningPositions(paths)
 
 	var pass2 error
 	seq := func(yield func(insights.Data) bool) {
@@ -40,14 +47,12 @@ func LastPerID(dataFolder string, date time.Time) (iter.Seq[insights.Data], func
 		if len(positions) == 0 {
 			return
 		}
-		lines, incomplete, err := readLines(dataFolder, date)
-		if err != nil {
-			pass2 = err
-			log.Printf("Error reopening report file for second pass: %s", err)
-			return
-		}
+		lines, incomplete := readLinesFrom(paths)
+		var malformed int
 		// Deferred, so a consumer that stops early still gets the verdict on what was read.
-		defer func() { pass2 = errors.Join(pass2, incomplete()) }()
+		defer func() {
+			pass2 = errors.Join(pass2, incomplete(), decodeFailures(malformed))
+		}()
 
 		next := 0
 		var pos int32
@@ -65,6 +70,7 @@ func LastPerID(dataFolder string, date time.Time) (iter.Seq[insights.Data], func
 			var rec Record
 			if err := json.Unmarshal(line, &rec); err != nil {
 				log.Printf("Skipping malformed record: %s", err)
+				malformed++
 				continue
 			}
 			if !yield(rec.Data) {
@@ -78,20 +84,25 @@ func LastPerID(dataFolder string, date time.Time) (iter.Seq[insights.Data], func
 // winningPositions is pass 1: the sorted positions of every instance's newest record. The map
 // lives and dies here, ~20 MB for a production day against ~220 MB for the decoded records.
 //
-// incomplete carries a segment this pass could not read in full, which matters as much as it
-// does in pass 2: a segment missed here drops its instances from the winner set entirely.
-func winningPositions(dataFolder string, date time.Time) (positions []int32, incomplete error, err error) {
-	lines, readIncomplete, err := readLines(dataFolder, date)
-	if err != nil {
-		return nil, nil, err
-	}
+// The returned error carries what this pass could not read: a segment missed here drops its
+// instances from the winner set entirely, exactly as in pass 2.
+func winningPositions(paths []string) ([]int32, error) {
+	lines, readIncomplete := readLinesFrom(paths)
 
 	best := make(map[string]winner)
 	var pos int32
+	var malformed int
 	for line := range lines {
 		var h recordHeader
-		// Pass 2 counts lines, not records, so an undecodable line still occupies a position.
-		if err := json.Unmarshal(line, &h); err != nil || h.Data.InsightsID == "" {
+		// Pass 2 counts lines, not records, so a line skipped here still occupies a position.
+		if err := json.Unmarshal(line, &h); err != nil {
+			malformed++
+			pos++
+			continue
+		}
+		// Not damage: ingest stores a report without an instance id as sent. Such a line can
+		// never win anything, but it is still a line.
+		if h.Data.InsightsID == "" {
 			pos++
 			continue
 		}
@@ -105,10 +116,10 @@ func winningPositions(dataFolder string, date time.Time) (positions []int32, inc
 		pos++
 	}
 
-	positions = make([]int32, 0, len(best))
+	positions := make([]int32, 0, len(best))
 	for _, w := range best {
 		positions = append(positions, w.pos)
 	}
 	slices.Sort(positions)
-	return positions, readIncomplete(), nil
+	return positions, errors.Join(readIncomplete(), decodeFailures(malformed))
 }

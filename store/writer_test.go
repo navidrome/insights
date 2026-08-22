@@ -20,18 +20,15 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// readAllLines returns the lines of every segment of a UTC day, in segment order. Every
-// segment must decode cleanly, trailer included, so a writer that stops terminating its
-// gzip member is caught here rather than silently tolerated.
+// readAllLines returns every segment's lines in order. Each must decode cleanly, trailer
+// included, so a writer that stops terminating its member fails here.
 func readAllLines(dataFolder string, date time.Time) []string {
 	GinkgoHelper()
 	return readSegments(dataFolder, date, false)
 }
 
-// readAllLinesLive is readAllLines for a day a writer still holds open. It tolerates
-// io.ErrUnexpectedEOF, which is how a flushed-but-unterminated member ends: the trailer is
-// only written on Close. Everything decoded before that point is intact, which is what the
-// reader in Task 3 relies on for both live reads and crash-truncated segments.
+// readAllLinesLive is readAllLines for a day still open, tolerating the io.ErrUnexpectedEOF a
+// flushed-but-unterminated member ends with.
 func readAllLinesLive(dataFolder string, date time.Time) []string {
 	GinkgoHelper()
 	return readSegments(dataFolder, date, true)
@@ -40,7 +37,7 @@ func readAllLinesLive(dataFolder string, date time.Time) []string {
 func readSegments(dataFolder string, date time.Time, tolerateOpenMember bool) []string {
 	GinkgoHelper()
 
-	// An unterminated member reports io.ErrUnexpectedEOF from both ReadAll and Close.
+	// An unterminated member reports the error from Close too.
 	check := func(err error, path string) {
 		GinkgoHelper()
 		if tolerateOpenMember && errors.Is(err, io.ErrUnexpectedEOF) {
@@ -67,8 +64,7 @@ func readSegments(dataFolder string, date time.Time, tolerateOpenMember bool) []
 	return lines
 }
 
-// randomID returns an incompressible string of about n bytes. Writing one forces the deflate
-// writer to spill to the underlying file instead of buffering the record.
+// randomID is incompressible, so writing one forces deflate to spill to the file.
 func randomID(n int) string {
 	GinkgoHelper()
 	b := make([]byte, n)
@@ -126,9 +122,8 @@ var _ = Describe("Writer", func() {
 		Expect(lines[1]).To(ContainSubstring(`"id":"b"`))
 	})
 
-	// The reason segments exist. A killed process leaves its member unterminated; appending
-	// to that file would put a gzip header inside an open flate stream, and gzip.Reader then
-	// fails with "flate: corrupt input" for everything written after the restart.
+	// The reason segments exist: appending to a killed process's unterminated member costs
+	// every record written after the restart.
 	It("keeps a crashed session's damage inside its own segment", func() {
 		w1, err := NewWriter(dir)
 		Expect(err).ToNot(HaveOccurred())
@@ -203,9 +198,7 @@ var _ = Describe("Writer", func() {
 		Expect(w.Close()).To(Succeed())
 	})
 
-	// A handler racing SIGTERM must not resurrect a closed writer: that would hold a segment
-	// open with no lock and no flush loop, and creating an empty segment would make HasDay
-	// report a day that has no data.
+	// A handler racing SIGTERM must not reopen a segment with no lock and no flush loop.
 	It("refuses Append after Close and creates no file", func() {
 		w, err := NewWriter(dir)
 		Expect(err).ToNot(HaveOccurred())
@@ -216,14 +209,10 @@ var _ = Describe("Writer", func() {
 		Expect(HasDay(dir, testDay)).To(BeFalse())
 	})
 
-	// gzip.Writer latches its first write error forever, and openFor keeps the broken stream
-	// while the day is unchanged. Without a fatal signal, one transient ENOSPC or EIO turns
-	// every later report into a 500 for the rest of the process's life, with nothing but a
-	// log line to show for it.
+	// gzip.Writer latches its first write error forever, so without a fatal signal one ENOSPC
+	// 500s every later report for the life of the process.
 	Describe("an unrecoverable write error", func() {
-		// breakFile closes the segment file under the gzip stream, which is how a write
-		// failure reaches gzip.Writer: the next write to the file fails and gzip keeps
-		// returning that error from every call afterwards.
+		// breakFile closes the file under the gzip stream, so the next write fails.
 		breakFile := func(w *Writer) {
 			GinkgoHelper()
 			w.mu.Lock()
@@ -245,7 +234,7 @@ var _ = Describe("Writer", func() {
 			Expect(w.Fatal()).To(BeClosed())
 			Expect(w.Err()).To(HaveOccurred())
 
-			// The latch is permanent: this is the state that would otherwise 500 forever.
+			// The latch is permanent.
 			Expect(w.Append(dataFor("b"), testDay)).ToNot(Succeed())
 			Expect(w.Fatal()).To(BeClosed())
 		})
@@ -258,8 +247,7 @@ var _ = Describe("Writer", func() {
 
 			breakFile(w)
 
-			// Enough incompressible payload that the deflate writer has to spill to the
-			// file, so the failure surfaces from Append itself and not only from Flush.
+			// Enough incompressible payload that Append itself fails, not only Flush.
 			var appendErr error
 			for i := 0; i < 32 && appendErr == nil; i++ {
 				appendErr = w.Append(dataFor(randomID(64*1024)), testDay)
@@ -282,15 +270,11 @@ var _ = Describe("Writer", func() {
 			Expect(w.Err()).To(MatchError(first))
 		})
 
-		// A sync failure is writeback reporting an error for bytes the process already handed
-		// to the kernel: records believed durable may be gone, and the deflate stream they
-		// belong to keeps growing. Returned plain, it left the Writer healthy — green
-		// /healthz, 200s to reporters — while the segment tail silently rotted.
+		// A sync failure means records believed durable may be gone. Returned plain, it leaves
+		// a green /healthz while the segment tail rots.
 		It("is reported through Fatal and Err when the file sync fails", func() {
-			// Installed once, before the Writer exists, and restored only after Close has
-			// joined the flush loop: that loop calls syncFile on its own goroutine, so
-			// reassigning this global mid-spec would be an unsynchronized write to a live
-			// reader. The counter is only ever touched from inside Flush, under w.mu.
+			// Installed before the Writer exists and restored after Close joins the flush
+			// loop, which calls syncFile on its own goroutine.
 			prev := syncFile
 			var syncs int
 			syncFile = func(f *os.File) error {
@@ -313,18 +297,14 @@ var _ = Describe("Writer", func() {
 			Expect(w.Fatal()).To(BeClosed())
 			Expect(w.Err()).To(MatchError(flushErr))
 
-			// Kept, so the next sync succeeding does not talk the process out of shutting
-			// down: nothing after the fact can tell a lost write from a durable one.
+			// Kept: nothing afterwards can tell a lost write from a durable one.
 			_ = w.Flush()
 			Expect(w.Err()).To(MatchError(flushErr))
 			Expect(w.Fatal()).To(BeClosed())
 		})
 
-		// Running out of segment indexes is unrecoverable in the same way: openFor asks for the
-		// same day on every later Append and gets the same refusal. Without the latch, ingest
-		// answers 500 to every report until UTC midnight with /healthz still green, so nothing
-		// marks the container unhealthy or restarts it — the failure mode this Writer exists to
-		// avoid. A restart does not free indexes, so this becomes a visible crash-loop instead.
+		// Every later Append gets the same refusal until UTC midnight. The latch trades a
+		// silent 500-forever outage for a visible crash-loop.
 		It("is reported through Fatal and Err when the day runs out of segment indexes", func() {
 			dayPath := dayDir(dir, testDay)
 			Expect(os.MkdirAll(dayPath, 0750)).To(Succeed())
@@ -343,15 +323,11 @@ var _ = Describe("Writer", func() {
 			Expect(w.Err()).To(MatchError(appendErr))
 		})
 
-		// Creating a segment fails on the first report after startup and after every UTC
-		// rollover. A persistent ENOSPC, EIO or read-only filesystem there means every report
-		// is answered 500 forever with Fatal still open and /healthz still green — the silent
-		// outage. A single blip must not do the same, because the next Append retries from
-		// scratch and heals.
+		// A persistent creation failure 500s every report behind a green /healthz. A single
+		// blip must not, because the next Append retries from scratch.
 		Describe("a segment that cannot be created", func() {
-			// blockDay puts a regular file where a month directory has to go, so MkdirAll
-			// fails with ENOTDIR. Portable, and it needs no privileges to set up or undo —
-			// unlike a read-only directory, which a test running as root ignores.
+			// A regular file where a month directory goes makes MkdirAll fail with ENOTDIR.
+			// Unlike a read-only directory, this also works when the test runs as root.
 			blockDay := func(date time.Time) {
 				GinkgoHelper()
 				monthDir := dayDir(dir, date)
@@ -362,8 +338,8 @@ var _ = Describe("Writer", func() {
 				GinkgoHelper()
 				Expect(os.Remove(dayDir(dir, date))).To(Succeed())
 			}
-			// age backdates the current run of failures, which is how a spec reaches the far
-			// side of segmentCreateGrace without sleeping through it.
+			// age backdates the failure run, so a spec can cross segmentCreateGrace without
+			// sleeping.
 			age := func(w *Writer, d time.Duration) {
 				GinkgoHelper()
 				w.mu.Lock()
@@ -391,8 +367,7 @@ var _ = Describe("Writer", func() {
 				Expect(w.Err()).To(MatchError(appendErr))
 			})
 
-			// The other half: a failure that goes away leaves nothing behind, so a later,
-			// unrelated one is judged on its own age and not on the old run's.
+			// A failure that goes away leaves nothing behind for a later one to inherit.
 			It("does not latch when a failure is followed by a success", func() {
 				blockDay(testDay)
 
@@ -402,15 +377,14 @@ var _ = Describe("Writer", func() {
 
 				Expect(w.Append(dataFor("a"), testDay)).ToNot(Succeed())
 				Expect(w.Fatal()).ToNot(BeClosed())
-				// Old enough to latch, so only the success below can stop it from doing so.
+				// Old enough to latch, so only the success below can stop it.
 				age(w, 2*segmentCreateGrace)
 
 				unblockDay(testDay)
 				Expect(w.Append(dataFor("b"), testDay)).To(Succeed())
 				Expect(w.Fatal()).ToNot(BeClosed())
 
-				// A fresh failure on the next rollover: it starts its own run, so it is a
-				// blip again rather than the tail of one that ended minutes ago.
+				// A fresh failure starts its own run, so it is a blip again.
 				nextMonth := testDay.AddDate(0, 1, 0)
 				blockDay(nextMonth)
 				Expect(w.Append(dataFor("c"), nextMonth)).ToNot(Succeed())
@@ -442,8 +416,8 @@ var _ = Describe("Writer", func() {
 	})
 })
 
-// crash simulates an unclean shutdown: the flush loop stops and the lock is released, but the
-// gzip member is never terminated, exactly as if the process had been killed after a flush.
+// crash stops the flush loop and releases the lock without terminating the gzip member, as a
+// kill after a flush would.
 func crash(w *Writer) {
 	GinkgoHelper()
 	Expect(w.Flush()).To(Succeed())
@@ -456,5 +430,5 @@ func crash(w *Writer) {
 	Expect(syscall.Flock(int(w.lock.Fd()), syscall.LOCK_UN)).To(Succeed())
 	Expect(w.lock.Close()).To(Succeed())
 	w.lock = nil
-	// w.gz and w.file are deliberately left open and unterminated.
+	// w.gz and w.file are left open and unterminated on purpose.
 }

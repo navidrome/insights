@@ -29,8 +29,7 @@ func dataFor(id string) insights.Data {
 	return d
 }
 
-// appendPlainLine appends a raw line to the day's last segment as its own gzip member,
-// which is how a hand-edited or corrupt tail looks to a reader.
+// appendPlainLine appends a raw line as its own gzip member, as a hand-edited tail looks.
 func appendPlainLine(dataFolder string, date time.Time, line string) {
 	GinkgoHelper()
 	paths := DaySegmentPaths(dataFolder, date)

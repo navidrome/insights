@@ -24,8 +24,7 @@ var _ = Describe("WriteFileAtomic", func() {
 		path = filepath.Join(dir, "charts.json")
 	})
 
-	// entries is what is left in the directory: the point of a temp-file write is that nothing
-	// but the target survives it.
+	// Nothing but the target should survive a temp-file write.
 	entries := func() []string {
 		GinkgoHelper()
 		found, err := os.ReadDir(dir)
@@ -49,8 +48,7 @@ var _ = Describe("WriteFileAtomic", func() {
 		Expect(entries()).To(ConsistOf("charts.json"))
 	})
 
-	// os.CreateTemp makes its file 0600 whatever the caller asks for, so the mode has to be set
-	// explicitly or every file published through here silently ends up owner-only.
+	// os.CreateTemp always makes its file 0600, so the mode has to be set explicitly.
 	It("uses the permissions it was given, not the temp file's", func() {
 		Expect(fsutil.WriteFileAtomic(path, []byte("hello"), 0644)).To(Succeed())
 
@@ -59,9 +57,8 @@ var _ = Describe("WriteFileAtomic", func() {
 		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0644)))
 	})
 
-	// The whole reason this exists. An O_TRUNC rewrite empties the file in place, so a reader
-	// holding that name sees zero bytes, then a prefix, then the whole thing; a rename swaps a
-	// finished file in, and readers see one or the other.
+	// The reason this exists: an O_TRUNC rewrite empties the file in place, so a reader sees
+	// zero bytes, then a prefix, then the whole thing.
 	It("replaces the file by rename rather than truncating it in place", func() {
 		Expect(os.WriteFile(path, []byte("old"), 0600)).To(Succeed())
 		before, err := os.Stat(path)
@@ -76,9 +73,8 @@ var _ = Describe("WriteFileAtomic", func() {
 		Expect(os.ReadFile(path)).To(Equal([]byte("new"))) //#nosec G304 -- test-only path from the suite's TempDir
 	})
 
-	// A failed publish must cost nothing: the previous contents stay readable, and no debris is
-	// left in a directory the readers walk. Renaming onto a directory is the failure that can be
-	// provoked portably; the cleanup path it exercises is the one every other failure takes.
+	// A failed publish must cost nothing: old contents readable, no debris left behind.
+	// Renaming onto a directory is the portable way to provoke it.
 	It("leaves the original intact and no debris when the write fails", func() {
 		target := filepath.Join(dir, "in-the-way")
 		Expect(os.Mkdir(target, 0750)).To(Succeed())

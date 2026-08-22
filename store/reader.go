@@ -17,19 +17,9 @@ import (
 	"github.com/navidrome/insights/consts"
 )
 
-// readLines streams the raw JSON lines of a day's report segments, oldest segment first.
-//
-// The yielded slice is only valid until the next iteration — decode it immediately, never
-// retain it.
-//
-// The lines of every segment form one continuous sequence: consumers that number lines by
-// position get numbering that does not restart or skip at a segment boundary. Because
-// segments are append-only and ordered, a position is stable across reads even while ingest
-// is still writing — new records only ever land after the last position of the previous read.
-//
-// Only complete, newline-terminated lines are yielded. A truncated tail (unclean shutdown,
-// or the live segment being written right now) is not an error: everything complete is
-// yielded and the half-written remainder is dropped.
+// readLines streams a day's segments as one continuous sequence, oldest first. Only complete
+// lines are yielded; a truncated tail is not an error. The yielded slice is valid only until
+// the next iteration, and a line's position is stable across reads.
 func readLines(dataFolder string, date time.Time) (iter.Seq[[]byte], error) {
 	paths := DaySegmentPaths(dataFolder, date)
 	if len(paths) == 0 {
@@ -45,11 +35,8 @@ func readLines(dataFolder string, date time.Time) (iter.Seq[[]byte], error) {
 	}, nil
 }
 
-// readSegment streams one segment's lines. It returns false when the consumer stopped, which
-// must halt the whole day: yielding again after that panics the range-over-func loop.
-//
-// A segment that cannot be opened or has no readable gzip data is logged and skipped, so one
-// damaged file does not hide the rest of the day.
+// readSegment streams one segment's lines, returning false when the consumer stopped. A
+// damaged or unopenable segment is logged and skipped rather than hiding the rest of the day.
 func readSegment(path string, yield func([]byte) bool) bool {
 	f, err := os.Open(path) //#nosec G304 -- path comes from a controlled directory listing
 	if err != nil {
@@ -63,10 +50,8 @@ func readSegment(path string, yield func([]byte) bool) bool {
 	if strings.HasSuffix(path, ".gz") {
 		gz, err = gzip.NewReader(f)
 		if err != nil {
-			// A zero-byte segment is a process killed between creating the file and its
-			// first flush, not damage. It stays on disk for the whole retention window and
-			// every summarization pass reads it, so logging it means a hundred identical
-			// lines a day for something nobody can act on.
+			// A zero-byte segment is a process killed before its first flush, not damage, and
+			// every summarization pass would log it again.
 			if !isTruncatedTail(err) {
 				log.Printf("Report segment %s has no readable gzip data: %s", path, err) //#nosec G706 -- path is derived from controlled inputs
 			}
@@ -89,7 +74,7 @@ func readSegment(path string, yield func([]byte) bool) bool {
 
 	err = sc.Err()
 	if gz != nil {
-		// An unterminated member reports its error from Close as well as from the reads.
+		// An unterminated member reports its error from Close too.
 		if closeErr := gz.Close(); err == nil {
 			err = closeErr
 		}
@@ -100,20 +85,14 @@ func readSegment(path string, yield func([]byte) bool) bool {
 	return true
 }
 
-// isTruncatedTail reports whether err is the ordinary end of a segment whose gzip member was
-// never terminated. That happens on every read of the segment ingest currently has open
-// (flushed, but the trailer is only written on Close) and on every read of a segment left by
-// a killed process. Neither is corruption, so neither is worth logging.
-//
-// io.EOF is the same thing with nothing written at all: an empty file has no gzip header, so
-// gzip.NewReader reports io.EOF rather than io.ErrUnexpectedEOF.
+// isTruncatedTail reports whether err is the ordinary end of a gzip member that was never
+// terminated: the live segment, or one left by a killed process. Neither is corruption.
 func isTruncatedTail(err error) bool {
 	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
 }
 
-// scanCompleteLines is bufio.ScanLines without its final-token behaviour: a trailing chunk
-// with no newline is a line the writer never finished, so it is dropped rather than handed
-// to a consumer as if it were a record.
+// scanCompleteLines is bufio.ScanLines without its final token: a trailing chunk with no
+// newline is a line the writer never finished.
 func scanCompleteLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	if i := bytes.IndexByte(data, '\n'); i >= 0 {
 		return i + 1, data[:i], nil
@@ -124,8 +103,8 @@ func scanCompleteLines(data []byte, atEOF bool) (advance int, token []byte, err 
 	return 0, nil, nil
 }
 
-// ReadDay streams every record of a day's report segments, in the order they were written.
-// Lines that do not decode are skipped, so one bad line does not cost the rest of the day.
+// ReadDay streams every record of a day, in write order. Lines that do not decode are
+// skipped.
 func ReadDay(dataFolder string, date time.Time) (iter.Seq[Record], error) {
 	lines, err := readLines(dataFolder, date)
 	if err != nil {

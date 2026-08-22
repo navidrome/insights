@@ -55,16 +55,13 @@ type Summary struct {
 	ActiveUserStats  *Stats            `json:"activeUserStats,omitempty"`
 }
 
-// segmentPathsFor lists a day's report segments. It is a package-level variable so tests can
-// interpose the concurrent purge the stability check below exists for: a segment vanishing
-// between the capture and the read is not something a spec can time reliably otherwise.
+// segmentPathsFor is a variable so tests can interpose the concurrent purge the stability
+// check below exists for.
 var segmentPathsFor = store.DaySegmentPaths
 
 func SummarizeData(dataFolder string, date time.Time) error {
-	// The segment list is captured up front for two reasons. An empty one means the day was
-	// never recorded, which is not the same as a day with no instances: writing a zero-instance
-	// summary here would blank the day in the charts, because GetSummaries skips zero-instance
-	// files. A non-empty one is the baseline for the stability check before the save.
+	// An empty list means the day was never recorded, which is not a day with no instances.
+	// A non-empty one is the baseline for the stability check before the save.
 	before := segmentPathsFor(dataFolder, date)
 	if len(before) == 0 {
 		log.Printf("No report file for %s, skipping", date.Format(consts.DateFormat))
@@ -159,28 +156,10 @@ func SummarizeData(dataFolder string, date time.Time) error {
 	summary.LibraryStats = calcStats(libraryValues)
 	summary.ActiveUserStats = calcStats(activeUserValues)
 
-	// The three steps above — list, pass 1, pass 2 — are not a snapshot, and the purge that can
-	// delete this day runs in a different OS process, so no mutex covers the gap. An operator
-	// backfill (`process -once -days N`, which free-space retention makes useful over months of
-	// history) can reach a day the long-running process's hourly purge is deleting right now:
-	// some segments read before the deletion, the rest gone after it. That summarizes to a
-	// number that is neither the day's nor zero, and saving it would overwrite a correct
-	// historical summary with partial data. The all-or-nothing purge does not close this — it
-	// makes a *whole* day vanish mid-read, which is only safe because NumInstances == 0 returns
-	// above. A day that lost some of its segments to a kill mid-purge still lands here.
-	//
-	// So the save is conditional on the segment set being stable, and only in one direction: a
-	// segment that has *disappeared* means a purge, while a segment that has *appeared* is
-	// ordinary — ingest opens a new segment on every restart, and today's day gains segments as
-	// a matter of course. Treating any change as unsafe would stop the current day from ever
-	// being summarized.
-	//
-	// This narrows the window rather than closing it: a purge that starts between this check and
-	// SaveSummary still writes the partial summary. That gap is microseconds against the seconds
-	// or minutes the read above takes, and closing it properly needs a lock the purge and the
-	// backfill both take — cross-process, since they are different containers. Worth doing only
-	// if this ever fires in production, which would mean the two are colliding often enough for
-	// the remaining window to matter too.
+	// The purge runs in another process, so a backfill can read some of a day's segments and
+	// miss the rest, overwriting a correct summary with a wrong number. Only disappearing
+	// segments are unsafe: today's day gains segments routinely. This narrows the window
+	// rather than closing it; closing it needs a cross-process lock.
 	if gone := missingSegments(before, segmentPathsFor(dataFolder, date)); len(gone) > 0 {
 		log.Printf("Skipping the summary for %s: %d of its %d report segment(s) were deleted while "+
 			"it was being summarized (first: %s), so the numbers are partial and would overwrite a "+
@@ -196,8 +175,8 @@ func SummarizeData(dataFolder string, date time.Time) error {
 	return err
 }
 
-// missingSegments returns the paths of before that are no longer in after, in their original
-// order. Paths present only in after are ignored on purpose; see the call site.
+// missingSegments returns the paths of before that are no longer in after, in order. Paths
+// only in after are ignored; see the call site.
 func missingSegments(before, after []string) []string {
 	current := make(map[string]struct{}, len(after))
 	for _, path := range after {

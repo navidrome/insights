@@ -58,9 +58,8 @@ var _ = Describe("Record", func() {
 			Expect(p).To(Equal(dayFile("reports-2026-08-03.002.ndjson.gz")))
 		})
 
-		// Gap-filling would break the one guarantee readers depend on: that segment order is
-		// chronological. Reusing index 002 after it was deleted by hand would place records
-		// written today before records written last week.
+		// Reusing an index deleted by hand would put today's records before last week's,
+		// breaking the chronological order readers depend on.
 		It("does not reuse an index left by a deleted segment", func() {
 			touch(dayFile("reports-2026-08-03.001.ndjson.gz"))
 			touch(dayFile("reports-2026-08-03.003.ndjson.gz"))
@@ -108,8 +107,7 @@ var _ = Describe("Record", func() {
 			}))
 		})
 
-		// One path per index. Returning both forms of the same segment would make every
-		// reader yield that segment's records twice.
+		// One path per index, or every reader yields that segment's records twice.
 		It("returns only the compressed form when a segment exists in both", func() {
 			touch(dayFile("reports-2026-08-03.001.ndjson"))
 			touch(dayFile("reports-2026-08-03.001.ndjson.gz"))

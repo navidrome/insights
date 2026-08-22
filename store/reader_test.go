@@ -15,8 +15,8 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// writeDay writes the given IDs as one writer session, one record each, one second apart.
-// Every call is a new session, so every call creates a new segment.
+// writeDay writes the given IDs one second apart as one session, so each call adds a
+// segment.
 func writeDay(dir string, date time.Time, ids ...string) {
 	GinkgoHelper()
 	w, err := NewWriter(dir)
@@ -37,7 +37,7 @@ func collectIDs(seq iter.Seq[Record]) []string {
 	return ids
 }
 
-// truncate lops the last n bytes off the day's last segment, simulating an unclean shutdown.
+// truncate lops n bytes off the day's last segment, as an unclean shutdown would.
 func truncate(dir string, date time.Time, n int64) {
 	GinkgoHelper()
 	paths := DaySegmentPaths(dir, date)
@@ -49,11 +49,8 @@ func truncate(dir string, date time.Time, n int64) {
 	Expect(os.Truncate(path, fi.Size()-n)).To(Succeed())
 }
 
-// truncationBytes is how much to lop off a 100-record segment (~960 bytes compressed) to
-// simulate a kill mid-write. It is well past the 8-byte trailer and into the deflate stream,
-// so it costs several complete records and leaves the last surviving line half-written —
-// both of the conditions the tolerant reader exists for. Lopping only the trailer would make
-// those tests pass without exercising either.
+// truncationBytes reaches past the 8-byte trailer into the deflate stream of a 100-record
+// segment, so it costs whole records and leaves the last line half-written.
 const truncationBytes = 40
 
 // captureLog returns everything f logged through the standard logger.
@@ -71,8 +68,7 @@ func captureLog(f func()) string {
 	return buf.String()
 }
 
-// manyIDs builds n sortable IDs, enough compressed data that a truncation costs records
-// rather than only the gzip trailer.
+// manyIDs builds n sortable IDs, enough data that a truncation costs records.
 func manyIDs(n int) []string {
 	ids := make([]string, n)
 	for i := range ids {
@@ -161,9 +157,8 @@ var _ = Describe("ReadDay", func() {
 		Expect(got).To(Equal(ids[:len(got)]), "survivors must be an intact prefix")
 	})
 
-	// Both of these tails are routine, not damage: the live segment has no trailer until
-	// ingest closes it, and a killed process leaves one behind. Logging either would cry
-	// corruption on every summarization run.
+	// Neither tail is damage, and logging them would cry corruption on every summarization
+	// run.
 	It("logs nothing when reading a truncated segment", func() {
 		writeDay(dir, testDay, manyIDs(100)...)
 		truncate(dir, testDay, truncationBytes)
@@ -191,9 +186,8 @@ var _ = Describe("ReadDay", func() {
 		Expect(out).To(BeEmpty())
 	})
 
-	// A process killed between creating a segment and its first flush leaves a zero-byte
-	// file. It sits there for the whole retention window, and every summarization pass reads
-	// every day twice, so logging it is a hundred identical lines a day about nothing.
+	// A zero-byte segment is a kill before the first flush, and it is re-read for the whole
+	// retention window.
 	It("logs nothing for a zero-byte segment", func() {
 		writeDay(dir, testDay, "a")
 		Expect(os.WriteFile(segmentPath(dir, testDay, 2), nil, consts.FilePermissions)).To(Succeed())
@@ -207,8 +201,7 @@ var _ = Describe("ReadDay", func() {
 		Expect(out).To(BeEmpty())
 	})
 
-	// The other half of that: a file with content that is not gzip is damage, and staying
-	// quiet about it would hide data loss.
+	// Content that is not gzip is damage, and staying quiet would hide data loss.
 	It("logs a segment whose contents are not gzip at all", func() {
 		writeDay(dir, testDay, "a")
 		Expect(os.WriteFile(segmentPath(dir, testDay, 2), []byte("not gzip at all\n"), consts.FilePermissions)).To(Succeed())
@@ -267,8 +260,8 @@ var _ = Describe("readLines", func() {
 		Expect(err.Error()).To(ContainSubstring("2026-08-03"))
 	})
 
-	// Task 4 numbers line positions continuously across a day's segments, so the sequence
-	// must be one run over every segment: no restart and no gap at a segment boundary.
+	// LastPerID numbers positions across the whole day, so the sequence must not restart or
+	// skip at a segment boundary.
 	It("yields the lines of every segment as one continuous sequence", func() {
 		writeDay(dir, testDay, "a", "b")
 		writeDay(dir, testDay, "c")
@@ -290,9 +283,7 @@ var _ = Describe("readLines", func() {
 		Expect(positions).To(Equal([]int{0, 1, 2}))
 	})
 
-	// A truncated tail leaves a half-written line. Yielding it would hand consumers a record
-	// that never existed, and make every read of a crash-damaged segment log a bogus
-	// "malformed record". Only newline-terminated lines are yielded.
+	// Yielding a half-written line would hand consumers a record that never existed.
 	It("drops the half-written line at a truncated tail", func() {
 		ids := manyIDs(100)
 		writeDay(dir, testDay, ids...)
@@ -325,7 +316,7 @@ var _ = Describe("readLines", func() {
 		Expect(n).To(Equal(1))
 	})
 
-	// Breaking on the last line of a segment must not start the next one.
+	// Breaking on a segment's last line must not start the next segment.
 	It("stops reading when the consumer breaks at a segment boundary", func() {
 		writeDay(dir, testDay, "a")
 		writeDay(dir, testDay, "b")

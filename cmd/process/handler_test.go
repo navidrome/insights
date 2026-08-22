@@ -11,9 +11,8 @@ import (
 	"github.com/navidrome/insights/consts"
 )
 
-// nextMarker is written by the stand-in "next" handler so the middleware tests can tell
-// "next was called" apart from "nothing happened": httptest.NewRecorder starts at 200, so a
-// status-only assertion passes even when the middleware never calls next and writes nothing.
+// nextMarker tells "next was called" apart from "nothing happened", since NewRecorder starts
+// at 200.
 const nextMarker = "reached next handler"
 
 func markerHandler() http.Handler {

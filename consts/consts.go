@@ -6,31 +6,15 @@ import "time"
 const (
 	DefaultPort       = "8080"
 	ReadHeaderTimeout = 3 * time.Second
-	// ReadTimeout bounds the whole request, headers and body together. Without it a client
-	// that dribbles its body out a byte at a time holds a handler open indefinitely, and
-	// ingest's shutdown waits for its handlers before closing the report writer — so a single
-	// slow-loris connection could stall the drain past its deadline. Reports average ~1.6KB,
-	// so this is orders of magnitude more than any honest client needs, and it stays under
-	// the shutdown deadline the drain is measured against.
+	// Bounds the whole request. Without it a slow-loris upload stalls ingest's shutdown drain
+	// past its deadline. Reports average ~1.6KB, so 5s is far more than any client needs.
 	ReadTimeout = 5 * time.Second
-	// IdleTimeout must be set explicitly whenever ReadTimeout is. net/http's idleTimeout()
-	// falls back to ReadTimeout when IdleTimeout is zero, so setting only ReadTimeout also
-	// retires pooled keep-alive connections after 5s idle — and Caddy reverse-proxies to
-	// ingest over a connection pool. A server-initiated close that lands while the proxy is
-	// dispatching a POST is a lost report, not a retry: Go's transport does not replay a
-	// request with a body (isReplayable is false), so the reporter gets a 502 and the report
-	// is gone.
-	//
-	// The value is above Caddy's 2-minute default keep-alive so the proxy is the side that
-	// retires an idle connection. A close the client initiates has no such race: the
-	// transport takes the connection out of its pool before closing it. Anything shorter
-	// only narrows the window instead of closing it.
+	// Must be set whenever ReadTimeout is: net/http falls back to it when this is zero, and Go
+	// will not replay a POST body when a pooled connection closes mid-dispatch. Above Caddy's
+	// 2-minute keep-alive, so the proxy closes idle connections first.
 	IdleTimeout = 150 * time.Second
-	// RateLimitRequests is per client IP, not per instance. Several instances can share one
-	// public IP behind NAT, and they report ~5 minutes after startup — so a host running two
-	// of them loses one report on every correlated restart if the allowance is 1. An instance
-	// reports about once a day, so this stays far above legitimate use while still capping a
-	// flood. The undercount it prevents is invisible in the data, since no IP is stored.
+	// Per client IP, not per instance: instances behind one NAT report within minutes of each
+	// other. An instance reports about once a day, so this is far above legitimate use.
 	RateLimitRequests = 10
 	RateLimitWindow   = 30 * time.Minute
 )
@@ -39,38 +23,28 @@ const (
 const (
 	CronSummarize     = "0 */2 * * *" // Every 2 hours
 	CronGenerateChart = "5 0 * * *"   // Daily at 00:05 UTC
-	// CronCleanup runs hourly, not daily: retention is now driven by free space, and a daily
-	// check cannot stop a volume that fills between two runs. A full disk takes ingest down —
-	// it fails fast by design — so the purge has to get a look in well before that. The :30
-	// offset keeps it off the hour that summarization starts on, on a 1 vCPU box.
+	// Hourly, not daily: a daily check cannot stop a volume that fills between two runs, and a
+	// full disk takes ingest down. The :30 offset keeps it off summarization's hour.
 	CronCleanup = "30 * * * *" // Hourly at :30
 )
 
 // Data retention and summarization
 const (
 	SummarizeLookbackDays = 5
-	// MinFreeBytes is the free space the purge tries to keep available on the volume holding
-	// the data folder. It is a floor on the whole volume, not a cap on what reports may use:
-	// what matters is that the box keeps working, whatever is consuming the disk.
+	// MinFreeBytes is a floor on the whole volume, not a cap on what reports may use.
 	MinFreeBytes = 500 << 20 // 500 MiB
-	// MinRetentionDays is the age below which a report day is never deleted, no matter how
-	// tight the disk is. It is a safety floor, not a target: with free space to spare the
-	// store keeps every day it has.
+	// MinRetentionDays is the age below which a day is never deleted, whatever the disk looks
+	// like. A safety floor, not a target.
 	MinRetentionDays = 7
 )
 
-// MinRetentionDays must stay strictly greater than SummarizeLookbackDays. SummarizeData
-// re-reads the last SummarizeLookbackDays days every two hours; if disk pressure deleted a day
-// still inside that window, the day would either drop out of the charts or be rewritten from
-// partial data, with nothing in the logs to say why. This blank constant asserts the invariant
-// at compile time: lowering MinRetentionDays to SummarizeLookbackDays or below makes the
-// expression negative, and a negative constant does not convert to uint.
+// MinRetentionDays must stay strictly greater than SummarizeLookbackDays, or the purge can
+// delete a day the summarizer is still re-reading. Negative constants do not convert to uint.
 const _ = uint(MinRetentionDays - SummarizeLookbackDays - 1)
 
 // Report file storage
 const (
-	// FlushInterval bounds how much buffered data an unclean shutdown can lose.
-	// Measured cost against one-shot compression: 0.7%.
+	// FlushInterval bounds what an unclean shutdown can lose. Costs 0.7% against one-shot.
 	FlushInterval = 30 * time.Second
 	// MaxLineBytes caps a single report line. Payloads average ~1.6KB.
 	MaxLineBytes = 4 * 1024 * 1024

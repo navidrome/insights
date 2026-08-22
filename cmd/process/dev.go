@@ -1,10 +1,7 @@
 //go:build dev
 
-// Dev-only routes: the static web assets and the server-rendered charts page, which are served
-// straight from the chart data this worker writes. Production builds get the no-op in dev_stub.go.
-//
-// Deliberately not a package doc comment: dev.go sorts before main.go, so a doc comment here
-// would replace the command's description in `go doc` whenever the dev tag is set.
+// Dev-only routes: static web assets and the server-rendered charts page. Production builds
+// get the no-op in dev_stub.go. Not a package doc: dev.go sorts before main.go.
 
 package main
 
@@ -23,6 +20,6 @@ func registerDevRoutes(r chi.Router) {
 		http.ServeFile(w, r, consts.WebIndexPath)
 	})
 
-	// Charts endpoint (no rate limiting) - legacy, renders server-side
+	// Legacy charts endpoint, no rate limiting, rendered server-side
 	r.Get("/charts", charts.ChartsHandler())
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -216,4 +217,30 @@ func waitForListener(t *testing.T, addr string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("server never started listening on %s", addr)
+}
+
+// -once is what a backfill runs, and it turns this error into a non-zero exit. Without it
+// `make summarize` reports a clean run over days that never got a summary.
+func TestSummarizeReportsFailuresAfterTryingEveryDay(t *testing.T) {
+	prev := summarizeDay
+	t.Cleanup(func() { summarizeDay = prev })
+
+	boom := errors.New("boom")
+	var attempted int
+	summarizeDay = func(string, time.Time) error {
+		attempted++
+		if attempted == 2 {
+			return boom
+		}
+		return nil
+	}
+
+	err := summarize(t.TempDir(), 3)()
+
+	if !errors.Is(err, boom) {
+		t.Errorf("summarize error = %v, want it to wrap %v", err, boom)
+	}
+	if attempted != 3 {
+		t.Errorf("attempted %d days, want all 3 despite the failure on the second", attempted)
+	}
 }

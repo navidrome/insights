@@ -54,27 +54,22 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 		return err
 	}
 
-	// Segments an earlier purge hid but could not unlink. This sweep is the only thing that
-	// reclaims them, and it runs before the free-space check on purpose: a day left half hidden
-	// by a kill must be finished within the hour, not whenever the disk next fills up.
-	var swept int
-	for _, path := range abandoned {
-		if err := removeFile(path); err != nil { //#nosec G122 -- path comes from a controlled directory walk under DATA_FOLDER
-			log.Printf("Error deleting segment %s abandoned by an earlier purge: %v", path, err) //#nosec G706 -- path comes from a controlled directory walk
-			continue
-		}
-		swept++
-		log.Printf("Deleted segment %s abandoned by an earlier purge", path) //#nosec G706 -- path comes from a controlled directory walk
+	// Repair before retention, and before the free-space check: a day an earlier purge left
+	// half finished must not wait for the disk to fill up before it is made whole.
+	resumed, resumedFiles, err := resumeInterrupted(abandoned, segments)
+	if err != nil {
+		return err
 	}
+	days = slices.DeleteFunc(days, func(d time.Time) bool { return resumed[d] })
 
-	// Probed after the sweep, so the day loop below never deletes a day to reach a target the
-	// sweep already met.
+	// Probed after the repair, so the day loop below never deletes a day to reach a target the
+	// repair already met.
 	free, err := freeBytes(dataFolder)
 	if err != nil {
 		return err
 	}
 	if free >= minFreeBytes {
-		if swept > 0 {
+		if resumedFiles > 0 {
 			// Files went away, so a day directory may now be empty.
 			return pruneEmptyDirs(baseDir)
 		}
@@ -155,10 +150,11 @@ func PurgeToFreeSpace(dataFolder string, minFreeBytes uint64, minRetentionDays i
 }
 
 // reportDays groups report segments under baseDir by UTC day, oldest first, and also returns
-// the segments an earlier purge hid but failed to unlink. A missing baseDir is not an error.
-func reportDays(baseDir string) ([]time.Time, map[time.Time][]string, []string, error) {
+// the segments an earlier purge hid but failed to unlink, keyed by the same day. A missing
+// baseDir is not an error.
+func reportDays(baseDir string) ([]time.Time, map[time.Time][]string, map[time.Time][]string, error) {
 	segments := make(map[time.Time][]string)
-	var abandoned []string
+	abandoned := make(map[time.Time][]string)
 	err := filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error { //#nosec G703 -- baseDir is from controlled env var and constant
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -169,10 +165,12 @@ func reportDays(baseDir string) ([]time.Time, map[time.Time][]string, []string, 
 		if d.IsDir() {
 			return nil
 		}
-		// A hidden segment is still a report file name underneath.
+		// A hidden segment is still a report file name underneath, so it names its own day.
 		if rest, ok := strings.CutPrefix(d.Name(), purgingPrefix); ok {
-			if reportFileRegex.MatchString(rest) {
-				abandoned = append(abandoned, path)
+			if m := reportFileRegex.FindStringSubmatch(rest); m != nil {
+				if day, parseErr := time.ParseInLocation(consts.DateFormat, m[1], time.UTC); parseErr == nil {
+					abandoned[day] = append(abandoned[day], path)
+				}
 			}
 			return nil
 		}
@@ -198,6 +196,50 @@ func reportDays(baseDir string) ([]time.Time, map[time.Time][]string, []string, 
 	}
 	slices.SortFunc(days, func(a, b time.Time) int { return a.Compare(b) })
 	return days, segments, abandoned, nil
+}
+
+// resumeInterrupted finishes the days an earlier purge started and did not complete.
+//
+// A hidden segment is that purge's record of intent, so the rest of its day goes with it,
+// whatever free space looks like. Unlinking only the hidden half would leave the visible half
+// on disk, where HasDay reports it and a backfill summarizes it as if it were the whole day.
+//
+// It returns the days it finished, so the caller can drop them from its own list, and how many
+// files it deleted.
+func resumeInterrupted(abandoned, segments map[time.Time][]string) (map[time.Time]bool, int, error) {
+	interrupted := make([]time.Time, 0, len(abandoned))
+	for day := range abandoned {
+		interrupted = append(interrupted, day)
+	}
+	slices.SortFunc(interrupted, func(a, b time.Time) int { return a.Compare(b) })
+
+	done := make(map[time.Time]bool, len(interrupted))
+	var files int
+	for _, day := range interrupted {
+		// The visible siblings first. Until the day is gone the hidden segments are the only
+		// record that it was being purged, so unlinking them ahead of the siblings would throw
+		// away the one thing a later run needs to finish the job.
+		if rest := segments[day]; len(rest) > 0 {
+			n, err := removeDay(rest)
+			files += n
+			if err != nil {
+				return done, files, fmt.Errorf("finishing the interrupted purge of %s: %w",
+					day.Format(consts.DateFormat), err)
+			}
+		}
+		for _, path := range abandoned[day] {
+			if err := removeFile(path); err != nil { //#nosec G122 -- path comes from a controlled directory walk under DATA_FOLDER
+				log.Printf("Error deleting segment %s abandoned by an earlier purge: %v", path, err) //#nosec G706 -- path comes from a controlled directory walk
+				continue
+			}
+			files++
+			log.Printf("Deleted segment %s abandoned by an earlier purge", path) //#nosec G706 -- path comes from a controlled directory walk
+		}
+		done[day] = true
+		log.Printf("Finished purging report day %s, left incomplete by an earlier run",
+			day.Format(consts.DateFormat))
+	}
+	return done, files, nil
 }
 
 // removeDay hides every segment of a day before unlinking any of them, so no failure leaves a

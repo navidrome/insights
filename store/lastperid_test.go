@@ -15,14 +15,14 @@ var _ = Describe("LastPerID", func() {
 	})
 
 	It("returns an error when the day file does not exist", func() {
-		_, err := LastPerID(dir, testDay)
+		_, _, err := LastPerID(dir, testDay)
 		Expect(err).To(HaveOccurred())
 	})
 
 	It("yields every instance exactly once", func() {
 		writeDay(dir, testDay, "a", "b", "c")
 
-		seq, err := LastPerID(dir, testDay)
+		seq, _, err := LastPerID(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		var ids []string
@@ -45,7 +45,7 @@ var _ = Describe("LastPerID", func() {
 		Expect(w.Append(late, testDay.Add(time.Hour))).To(Succeed())
 		Expect(w.Close()).To(Succeed())
 
-		seq, err := LastPerID(dir, testDay)
+		seq, _, err := LastPerID(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		var got []int64
@@ -68,7 +68,7 @@ var _ = Describe("LastPerID", func() {
 		Expect(w.Append(older, testDay.Add(time.Hour))).To(Succeed()) // out-of-order append
 		Expect(w.Close()).To(Succeed())
 
-		seq, err := LastPerID(dir, testDay)
+		seq, _, err := LastPerID(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		var got []int64
@@ -86,7 +86,7 @@ var _ = Describe("LastPerID", func() {
 		appendPlainLine(dir, testDay, line)
 		appendPlainLine(dir, testDay, line)
 
-		seq, err := LastPerID(dir, testDay)
+		seq, _, err := LastPerID(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		var ids []string
@@ -102,7 +102,7 @@ var _ = Describe("LastPerID", func() {
 	It("ignores records appended after the first pass", func() {
 		writeDay(dir, testDay, "a", "b")
 
-		seq, err := LastPerID(dir, testDay) // pass 1 runs here
+		seq, _, err := LastPerID(dir, testDay) // pass 1 runs here
 		Expect(err).ToNot(HaveOccurred())
 
 		appendPlainLine(dir, testDay, `{"time":"2026-08-03T00:00:09Z","data":{"id":"late"}}`)
@@ -117,7 +117,7 @@ var _ = Describe("LastPerID", func() {
 	It("stops reading when the consumer breaks", func() {
 		writeDay(dir, testDay, "a", "b", "c")
 
-		seq, err := LastPerID(dir, testDay)
+		seq, _, err := LastPerID(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		var ids []string
@@ -132,7 +132,7 @@ var _ = Describe("LastPerID", func() {
 		writeDay(dir, testDay, "a")
 		appendPlainLine(dir, testDay, `{"time":"2026-08-03T00:00:05Z","data":{}}`)
 
-		seq, err := LastPerID(dir, testDay)
+		seq, _, err := LastPerID(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		var ids []string
@@ -149,7 +149,7 @@ var _ = Describe("LastPerID", func() {
 		appendPlainLine(dir, testDay, `{"time":"2026-08-03T00:00:05Z","data":{}}`)
 		writeDay(dir, testDay, "b")
 
-		seq, err := LastPerID(dir, testDay)
+		seq, _, err := LastPerID(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		var ids []string

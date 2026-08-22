@@ -72,7 +72,7 @@ func SummarizeData(dataFolder string, date time.Time) error {
 	// day it arrived. Captured once, so a run spanning UTC midnight keeps one rule throughout.
 	live := date.UTC().Truncate(24 * time.Hour).Equal(time.Now().UTC().Truncate(24 * time.Hour))
 
-	rows, err := store.LastPerID(dataFolder, date)
+	rows, incomplete, err := store.LastPerID(dataFolder, date)
 	if err != nil {
 		log.Printf("Error reading reports: %s", err)
 		return err
@@ -159,6 +159,15 @@ func SummarizeData(dataFolder string, date time.Time) error {
 	summary.RadioStats = calcStats(radioValues)
 	summary.LibraryStats = calcStats(libraryValues)
 	summary.ActiveUserStats = calcStats(activeUserValues)
+
+	// A segment that could not be opened, or that ended in unreadable data, is skipped by the
+	// reader so one damaged file does not hide the rest of the day. That is right for reading
+	// and wrong for publishing: the day summarizes to a smaller, entirely plausible number.
+	if err := incomplete(); err != nil {
+		log.Printf("Skipping the summary for %s: %v, so the numbers are partial and would "+
+			"overwrite a correct summary", date.Format(consts.DateFormat), err)
+		return err
+	}
 
 	// The purge runs in another process, so a backfill can read some of a day's segments and
 	// miss the rest, overwriting a correct summary with a wrong number. This narrows the window

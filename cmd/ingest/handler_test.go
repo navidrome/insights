@@ -43,7 +43,7 @@ func TestCollectWritesRecord(t *testing.T) {
 		t.Fatalf("flushing: %v", err)
 	}
 
-	seq, err := store.ReadDay(dir, time.Now().UTC())
+	seq, _, err := store.ReadDay(dir, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("reading day: %v", err)
 	}

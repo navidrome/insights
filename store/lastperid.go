@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"iter"
 	"log"
 	"slices"
@@ -27,21 +28,26 @@ type winner struct {
 // LastPerID yields the newest record per instance, ties broken by later position. Two passes,
 // because the winner may be the last line and the decoded records do not fit in memory: pass 1
 // keeps a (position, timestamp) per instance, pass 2 decodes only the winners.
-func LastPerID(dataFolder string, date time.Time) (iter.Seq[insights.Data], error) {
-	positions, err := winningPositions(dataFolder, date)
+func LastPerID(dataFolder string, date time.Time) (iter.Seq[insights.Data], func() error, error) {
+	positions, pass1, err := winningPositions(dataFolder, date)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return func(yield func(insights.Data) bool) {
+	var pass2 error
+	seq := func(yield func(insights.Data) bool) {
+		pass2 = nil
 		if len(positions) == 0 {
 			return
 		}
-		lines, err := readLines(dataFolder, date)
+		lines, incomplete, err := readLines(dataFolder, date)
 		if err != nil {
+			pass2 = err
 			log.Printf("Error reopening report file for second pass: %s", err)
 			return
 		}
+		// Deferred, so a consumer that stops early still gets the verdict on what was read.
+		defer func() { pass2 = errors.Join(pass2, incomplete()) }()
 
 		next := 0
 		var pos int32
@@ -65,15 +71,19 @@ func LastPerID(dataFolder string, date time.Time) (iter.Seq[insights.Data], erro
 				return
 			}
 		}
-	}, nil
+	}
+	return seq, func() error { return errors.Join(pass1, pass2) }, nil
 }
 
 // winningPositions is pass 1: the sorted positions of every instance's newest record. The map
 // lives and dies here, ~20 MB for a production day against ~220 MB for the decoded records.
-func winningPositions(dataFolder string, date time.Time) ([]int32, error) {
-	lines, err := readLines(dataFolder, date)
+//
+// incomplete carries a segment this pass could not read in full, which matters as much as it
+// does in pass 2: a segment missed here drops its instances from the winner set entirely.
+func winningPositions(dataFolder string, date time.Time) (positions []int32, incomplete error, err error) {
+	lines, readIncomplete, err := readLines(dataFolder, date)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	best := make(map[string]winner)
@@ -95,10 +105,10 @@ func winningPositions(dataFolder string, date time.Time) ([]int32, error) {
 		pos++
 	}
 
-	positions := make([]int32, 0, len(best))
+	positions = make([]int32, 0, len(best))
 	for _, w := range best {
 		positions = append(positions, w.pos)
 	}
 	slices.Sort(positions)
-	return positions, nil
+	return positions, readIncomplete(), nil
 }

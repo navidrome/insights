@@ -40,9 +40,15 @@ func main() {
 
 	dataFolder := os.Getenv("DATA_FOLDER")
 
+	// -once is what `make summarize` and any other backfill automation runs, so a day that
+	// could not be read, or a chart export that failed, has to reach the exit status. The
+	// scheduled path below logs and carries on instead: a cron job that exits kills the worker.
 	if *once {
-		summarize(dataFolder, *days)()
-		generateCharts()()
+		sumErr := summarize(dataFolder, *days)()
+		chartErr := generateCharts()()
+		if err := errors.Join(sumErr, chartErr); err != nil {
+			log.Fatalf("Backfill failed: %v", err)
+		}
 		return
 	}
 
@@ -56,8 +62,8 @@ func main() {
 	}
 
 	go func() {
-		summarize(dataFolder, *days)()
-		generateCharts()()
+		_ = summarize(dataFolder, *days)()
+		_ = generateCharts()()
 	}()
 
 	r := chi.NewRouter()
@@ -174,13 +180,13 @@ func startTasks(dataFolder string, days int) (*cron.Cron, error) {
 // newScheduler registers every background job on a UTC cron, without starting it.
 func newScheduler(dataFolder string, days int) (*cron.Cron, error) {
 	c := cron.New(cron.WithLocation(time.UTC))
-	if _, err := c.AddFunc(consts.CronSummarize, summarize(dataFolder, days)); err != nil {
+	if _, err := c.AddFunc(consts.CronSummarize, forCron(summarize(dataFolder, days))); err != nil {
 		return nil, err
 	}
-	if _, err := c.AddFunc(consts.CronGenerateChart, generateCharts()); err != nil {
+	if _, err := c.AddFunc(consts.CronGenerateChart, forCron(generateCharts())); err != nil {
 		return nil, err
 	}
-	if _, err := c.AddFunc(consts.CronCleanup, cleanup(dataFolder)); err != nil {
+	if _, err := c.AddFunc(consts.CronCleanup, forCron(cleanup(dataFolder))); err != nil {
 		return nil, err
 	}
 	return c, nil

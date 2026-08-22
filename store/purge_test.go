@@ -138,11 +138,12 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(vol.probes).To(Equal(1), "one probe, after the sweep found nothing")
 	})
 
-	// The sweep is the only thing that reclaims a hidden segment, and a day left half hidden by
-	// a kill mid-purge stays half hidden until it runs. Gating it on disk pressure meant a
-	// broken day sat there, re-read by every backfill, until the volume happened to fill up.
-	It("sweeps segments abandoned by an earlier purge even when there is no disk pressure", func() {
+	// A kill between two renames leaves a day part hidden and part visible. Repair is not
+	// retention, so it must not wait for disk pressure, and it must take the whole day: leaving
+	// the visible half is what a backfill would summarize as if it were the full day.
+	It("finishes an interrupted purge even when there is no disk pressure", func() {
 		writeDay(dir, daysAgo(30), "a")
+		writeDay(dir, daysAgo(20), "b")
 		orphan := abandonedSegment(dir, daysAgo(30), 4096)
 		newFakeVolume(dir, baseFree).install()
 
@@ -151,8 +152,9 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		})
 
 		Expect(orphan).ToNot(BeAnExistingFile())
-		Expect(out).To(ContainSubstring("abandoned by an earlier purge"))
-		Expect(HasDay(dir, daysAgo(30))).To(BeTrue(), "the visible half must not be touched")
+		Expect(out).To(ContainSubstring("left incomplete by an earlier run"))
+		Expect(HasDay(dir, daysAgo(30))).To(BeFalse(), "the visible half must go with the hidden one")
+		Expect(HasDay(dir, daysAgo(20))).To(BeTrue(), "a day nobody was purging must be left alone")
 	})
 
 	It("deletes the oldest day first and stops as soon as the target is met", func() {
@@ -373,19 +375,20 @@ var _ = Describe("PurgeToFreeSpace", func() {
 			Expect(os.IsNotExist(statErr)).To(BeTrue(), "space no reader can see is space nothing else frees")
 		})
 
-		// The loop must re-probe after the sweep, or it deletes a day to reach a target the
-		// sweep already met.
-		It("does not delete a day for space the sweep had already freed", func() {
+		// The loop must re-probe after the repair, or it deletes a day to reach a target the
+		// repair already met. The hidden segment is on a day whose visible siblings were all
+		// unlinked before the crash, so finishing it frees space without taking a whole day.
+		It("does not delete a day for space the repair had already freed", func() {
 			old := daysAgo(30)
 			writeDay(dir, old, "a")
-			hidden := abandonedSegment(dir, old, 4096)
+			hidden := abandonedSegment(dir, daysAgo(40), 4096)
 			target := baseFree + 4096
 			newFakeVolume(dir, baseFree).install()
 
 			Expect(PurgeToFreeSpace(dir, target, 7)).To(Succeed())
 
 			_, statErr := os.Stat(hidden)
-			Expect(os.IsNotExist(statErr)).To(BeTrue(), "the sweep must have run")
+			Expect(os.IsNotExist(statErr)).To(BeTrue(), "the repair must have run")
 			Expect(HasDay(dir, old)).To(BeTrue(), "the target was met before any day needed to go")
 		})
 

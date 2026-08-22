@@ -20,28 +20,39 @@ import (
 // readLines streams a day's segments as one continuous sequence, oldest first. Only complete
 // lines are yielded; a truncated tail is not an error. The yielded slice is valid only until
 // the next iteration, and a line's position is stable across reads.
-func readLines(dataFolder string, date time.Time) (iter.Seq[[]byte], error) {
+//
+// The second return reports, once iteration has finished, whether a segment could not be read
+// in full. Anything derived from the whole day must check it: a skipped segment does not look
+// like an error downstream, it looks like a smaller day.
+func readLines(dataFolder string, date time.Time) (iter.Seq[[]byte], func() error, error) {
 	paths := DaySegmentPaths(dataFolder, date)
 	if len(paths) == 0 {
-		return nil, fmt.Errorf("no report segment for %s", date.UTC().Format(consts.DateFormat))
+		return nil, nil, fmt.Errorf("no report segment for %s", date.UTC().Format(consts.DateFormat))
 	}
 
-	return func(yield func([]byte) bool) {
+	var incomplete error
+	seq := func(yield func([]byte) bool) {
+		incomplete = nil
 		for _, path := range paths {
-			if !readSegment(path, yield) {
+			ok, err := readSegment(path, yield)
+			incomplete = errors.Join(incomplete, err)
+			if !ok {
 				return
 			}
 		}
-	}, nil
+	}
+	return seq, func() error { return incomplete }, nil
 }
 
-// readSegment streams one segment's lines, returning false when the consumer stopped. A
-// damaged or unopenable segment is logged and skipped rather than hiding the rest of the day.
-func readSegment(path string, yield func([]byte) bool) bool {
+// readSegment streams one segment's lines. The bool is false when the consumer stopped; the
+// error is set when the segment could not be read in full. A damaged segment is skipped rather
+// than hiding the rest of the day, so both returns matter: reading continues, and the caller
+// still learns the day is incomplete.
+func readSegment(path string, yield func([]byte) bool) (bool, error) {
 	f, err := os.Open(path) //#nosec G304 -- path comes from a controlled directory listing
 	if err != nil {
 		log.Printf("Skipping unreadable report segment %s: %s", path, err) //#nosec G706 -- path is derived from controlled inputs
-		return true
+		return true, fmt.Errorf("opening segment %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
 
@@ -52,10 +63,11 @@ func readSegment(path string, yield func([]byte) bool) bool {
 		if err != nil {
 			// A zero-byte segment is a process killed before its first flush, not damage, and
 			// every summarization pass would log it again.
-			if !isTruncatedTail(err) {
-				log.Printf("Report segment %s has no readable gzip data: %s", path, err) //#nosec G706 -- path is derived from controlled inputs
+			if isTruncatedTail(err) {
+				return true, nil
 			}
-			return true
+			log.Printf("Report segment %s has no readable gzip data: %s", path, err) //#nosec G706 -- path is derived from controlled inputs
+			return true, fmt.Errorf("reading segment %s: %w", path, err)
 		}
 		r = gz
 	}
@@ -68,7 +80,7 @@ func readSegment(path string, yield func([]byte) bool) bool {
 			if gz != nil {
 				_ = gz.Close()
 			}
-			return false
+			return false, nil
 		}
 	}
 
@@ -79,10 +91,11 @@ func readSegment(path string, yield func([]byte) bool) bool {
 			err = closeErr
 		}
 	}
-	if err != nil && !isTruncatedTail(err) {
-		log.Printf("Report segment %s ends with unreadable data, using the records read so far: %s", path, err) //#nosec G706 -- path is derived from controlled inputs
+	if err == nil || isTruncatedTail(err) {
+		return true, nil
 	}
-	return true
+	log.Printf("Report segment %s ends with unreadable data, using the records read so far: %s", path, err) //#nosec G706 -- path is derived from controlled inputs
+	return true, fmt.Errorf("reading segment %s: %w", path, err)
 }
 
 // isTruncatedTail reports whether err is the ordinary end of a gzip member that was never
@@ -104,13 +117,14 @@ func scanCompleteLines(data []byte, atEOF bool) (advance int, token []byte, err 
 }
 
 // ReadDay streams every record of a day, in write order. Lines that do not decode are
-// skipped.
-func ReadDay(dataFolder string, date time.Time) (iter.Seq[Record], error) {
-	lines, err := readLines(dataFolder, date)
+// skipped. The second return reports whether a segment could not be read in full; see
+// readLines.
+func ReadDay(dataFolder string, date time.Time) (iter.Seq[Record], func() error, error) {
+	lines, incomplete, err := readLines(dataFolder, date)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return func(yield func(Record) bool) {
+	seq := func(yield func(Record) bool) {
 		for line := range lines {
 			var rec Record
 			if err := json.Unmarshal(line, &rec); err != nil {
@@ -121,5 +135,6 @@ func ReadDay(dataFolder string, date time.Time) (iter.Seq[Record], error) {
 				return
 			}
 		}
-	}, nil
+	}
+	return seq, incomplete, nil
 }

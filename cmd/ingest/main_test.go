@@ -111,7 +111,7 @@ func TestRunDrainsInFlightRequestBeforeReturning(t *testing.T) {
 		t.Fatalf("closing writer: %v", err)
 	}
 
-	seq, err := store.ReadDay(dir, time.Now().UTC())
+	seq, _, err := store.ReadDay(dir, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("reading day: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestRunWaitsForAHandlerThatOutlivesTheShutdownDeadline(t *testing.T) {
 		t.Fatalf("closing writer: %v", err)
 	}
 
-	seq, err := store.ReadDay(dir, time.Now().UTC())
+	seq, _, err := store.ReadDay(dir, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("reading day: %v", err)
 	}
@@ -559,7 +559,7 @@ func TestRunDrainsInFlightRequestAfterServeError(t *testing.T) {
 		t.Fatalf("closing writer: %v", err)
 	}
 
-	seq, err := store.ReadDay(dir, time.Now().UTC())
+	seq, _, err := store.ReadDay(dir, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("reading day: %v", err)
 	}

@@ -58,7 +58,7 @@ func run(dataFolder string, date time.Time) error {
 		return fmt.Errorf("no report file for %s", date.Format(consts.DateFormat))
 	}
 
-	rows, err := store.LastPerID(dataFolder, date)
+	rows, incomplete, err := store.LastPerID(dataFolder, date)
 	if err != nil {
 		return fmt.Errorf("reading reports: %w", err)
 	}
@@ -94,6 +94,13 @@ func run(dataFolder string, date time.Time) error {
 
 	if s.numInstances == 0 {
 		return fmt.Errorf("no data found for %s", date.Format(consts.DateFormat))
+	}
+
+	// The reader skips a segment it cannot read, so the counts below would otherwise look like
+	// a smaller day rather than a partial one.
+	if err := incomplete(); err != nil {
+		return fmt.Errorf("reports for %s are incomplete, the counts below would be wrong: %w",
+			date.Format(consts.DateFormat), err)
 	}
 
 	s.trackStats = calcTrackStats(trackValues)

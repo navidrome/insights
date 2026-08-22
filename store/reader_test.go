@@ -85,14 +85,14 @@ var _ = Describe("ReadDay", func() {
 	})
 
 	It("returns an error when the day has no segments", func() {
-		_, err := ReadDay(dir, testDay)
+		_, _, err := ReadDay(dir, testDay)
 		Expect(err).To(HaveOccurred())
 	})
 
 	It("streams records in write order with time and payload intact", func() {
 		writeDay(dir, testDay, "a", "b", "c")
 
-		seq, err := ReadDay(dir, testDay)
+		seq, _, err := ReadDay(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		var ids []string
@@ -110,7 +110,7 @@ var _ = Describe("ReadDay", func() {
 	It("stops early when the consumer breaks", func() {
 		writeDay(dir, testDay, "a", "b", "c")
 
-		seq, err := ReadDay(dir, testDay)
+		seq, _, err := ReadDay(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		var ids []string
@@ -126,7 +126,7 @@ var _ = Describe("ReadDay", func() {
 		writeDay(dir, testDay, "c") // a second session, so a second segment
 		Expect(DaySegmentPaths(dir, testDay)).To(HaveLen(2))
 
-		seq, err := ReadDay(dir, testDay)
+		seq, _, err := ReadDay(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(collectIDs(seq)).To(Equal([]string{"a", "b", "c"}))
 	})
@@ -138,7 +138,7 @@ var _ = Describe("ReadDay", func() {
 		Expect(w.Append(dataFor("a"), testDay)).To(Succeed())
 		Expect(w.Flush()).To(Succeed())
 
-		seq, err := ReadDay(dir, testDay)
+		seq, _, err := ReadDay(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(collectIDs(seq)).To(Equal([]string{"a"}))
 	})
@@ -148,7 +148,7 @@ var _ = Describe("ReadDay", func() {
 		writeDay(dir, testDay, ids...)
 		truncate(dir, testDay, truncationBytes)
 
-		seq, err := ReadDay(dir, testDay)
+		seq, _, err := ReadDay(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		got := collectIDs(seq)
@@ -164,7 +164,7 @@ var _ = Describe("ReadDay", func() {
 		truncate(dir, testDay, truncationBytes)
 
 		out := captureLog(func() {
-			seq, err := ReadDay(dir, testDay)
+			seq, _, err := ReadDay(dir, testDay)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(collectIDs(seq)).ToNot(BeEmpty())
 		})
@@ -179,7 +179,7 @@ var _ = Describe("ReadDay", func() {
 		Expect(w.Flush()).To(Succeed())
 
 		out := captureLog(func() {
-			seq, err := ReadDay(dir, testDay)
+			seq, _, err := ReadDay(dir, testDay)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(collectIDs(seq)).To(Equal([]string{"a"}))
 		})
@@ -194,7 +194,7 @@ var _ = Describe("ReadDay", func() {
 		writeDay(dir, testDay, "c")
 
 		out := captureLog(func() {
-			seq, err := ReadDay(dir, testDay)
+			seq, _, err := ReadDay(dir, testDay)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(collectIDs(seq)).To(Equal([]string{"a", "c"}))
 		})
@@ -207,11 +207,50 @@ var _ = Describe("ReadDay", func() {
 		Expect(os.WriteFile(segmentPath(dir, testDay, 2), []byte("not gzip at all\n"), consts.FilePermissions)).To(Succeed())
 
 		out := captureLog(func() {
-			seq, err := ReadDay(dir, testDay)
+			seq, _, err := ReadDay(dir, testDay)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(collectIDs(seq)).To(Equal([]string{"a"}))
 		})
 		Expect(out).To(ContainSubstring("no readable gzip data"))
+	})
+
+	// The reader skips a damaged segment so one bad file does not hide the rest of the day.
+	// That is right for reading and wrong for publishing, so the skip has to be reportable:
+	// otherwise a caller sees a smaller day rather than a partial one.
+	Describe("reporting an incomplete read", func() {
+		It("reports a segment whose contents are not gzip at all", func() {
+			writeDay(dir, testDay, "a")
+			writeDay(dir, testDay, "b")
+			Expect(os.WriteFile(segmentPath(dir, testDay, 2), []byte("not gzip at all\n"), consts.FilePermissions)).To(Succeed())
+
+			seq, incomplete, err := ReadDay(dir, testDay)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(collectIDs(seq)).To(Equal([]string{"a"}), "the readable segment still comes back")
+			Expect(incomplete()).To(HaveOccurred(), "and the caller learns the day is partial")
+		})
+
+		// The tails the reader exists to tolerate must not read as damage, or every live day
+		// and every crash-truncated segment would stop its own summary from being saved.
+		It("reports nothing for a truncated tail", func() {
+			writeDay(dir, testDay, manyIDs(100)...)
+			truncate(dir, testDay, truncationBytes)
+
+			seq, incomplete, err := ReadDay(dir, testDay)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(collectIDs(seq)).ToNot(BeEmpty())
+			Expect(incomplete()).ToNot(HaveOccurred())
+		})
+
+		It("reports nothing for a zero-byte segment", func() {
+			writeDay(dir, testDay, "a")
+			Expect(os.WriteFile(segmentPath(dir, testDay, 2), nil, consts.FilePermissions)).To(Succeed())
+			writeDay(dir, testDay, "c")
+
+			seq, incomplete, err := ReadDay(dir, testDay)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(collectIDs(seq)).To(Equal([]string{"a", "c"}))
+			Expect(incomplete()).ToNot(HaveOccurred())
+		})
 	})
 
 	It("skips a malformed line and keeps the rest", func() {
@@ -219,7 +258,7 @@ var _ = Describe("ReadDay", func() {
 		appendPlainLine(dir, testDay, "{not json")
 		appendPlainLine(dir, testDay, `{"time":"2026-08-03T00:00:05Z","data":{"id":"z"}}`)
 
-		seq, err := ReadDay(dir, testDay)
+		seq, _, err := ReadDay(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(collectIDs(seq)).To(Equal([]string{"a", "z"}))
 	})
@@ -230,7 +269,7 @@ var _ = Describe("ReadDay", func() {
 		writeDay(dir, testDay, "c")
 		Expect(DaySegmentPaths(dir, testDay)).To(HaveLen(3))
 
-		seq, err := ReadDay(dir, testDay)
+		seq, _, err := ReadDay(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(collectIDs(seq)).To(Equal([]string{"a", "c"}))
 	})
@@ -241,7 +280,7 @@ var _ = Describe("ReadDay", func() {
 		line := `{"time":"2026-08-03T00:00:05Z","data":{"id":"z"}}` + "\n"
 		Expect(os.WriteFile(plain, []byte(line), consts.FilePermissions)).To(Succeed())
 
-		seq, err := ReadDay(dir, testDay)
+		seq, _, err := ReadDay(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(collectIDs(seq)).To(Equal([]string{"a", "z"}))
 	})
@@ -255,7 +294,7 @@ var _ = Describe("readLines", func() {
 	})
 
 	It("returns an error when the day has no segments", func() {
-		_, err := readLines(dir, testDay)
+		_, _, err := readLines(dir, testDay)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("2026-08-03"))
 	})
@@ -266,7 +305,7 @@ var _ = Describe("readLines", func() {
 		writeDay(dir, testDay, "a", "b")
 		writeDay(dir, testDay, "c")
 
-		lines, err := readLines(dir, testDay)
+		lines, _, err := readLines(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		var positions []int
@@ -289,7 +328,7 @@ var _ = Describe("readLines", func() {
 		writeDay(dir, testDay, ids...)
 		truncate(dir, testDay, truncationBytes)
 
-		lines, err := readLines(dir, testDay)
+		lines, _, err := readLines(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		n := 0
@@ -305,7 +344,7 @@ var _ = Describe("readLines", func() {
 	It("stops reading when the consumer breaks mid-segment", func() {
 		writeDay(dir, testDay, "a", "b", "c")
 
-		lines, err := readLines(dir, testDay)
+		lines, _, err := readLines(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		n := 0
@@ -321,7 +360,7 @@ var _ = Describe("readLines", func() {
 		writeDay(dir, testDay, "a")
 		writeDay(dir, testDay, "b")
 
-		lines, err := readLines(dir, testDay)
+		lines, _, err := readLines(dir, testDay)
 		Expect(err).ToNot(HaveOccurred())
 
 		var ids []string

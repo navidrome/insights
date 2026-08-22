@@ -130,6 +130,30 @@ var _ = Describe("SummarizeData", func() {
 				"a partial read overwrote a correct summary")
 		})
 
+		// A damaged segment is still listed, so the disappearance check cannot see it. The
+		// reader skips it and the day summarizes to a smaller, entirely plausible number.
+		It("keeps the good summary when a segment cannot be read", func() {
+			writeReports("a", "b")
+			writeReports("c") // a second writer session, so the day has two segments
+			Expect(SummarizeData(dir, day)).To(Succeed())
+
+			summaries, err := GetSummaries()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)))
+
+			paths := store.DaySegmentPaths(dir, day)
+			Expect(paths).To(HaveLen(2))
+			Expect(os.WriteFile(paths[0], []byte("not gzip at all\n"), 0o600)).To(Succeed())
+
+			Expect(SummarizeData(dir, day)).ToNot(Succeed(), "-once has to see this fail")
+
+			summaries, err = GetSummaries()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(summaries).To(HaveLen(1))
+			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)),
+				"a damaged segment overwrote a correct summary")
+		})
+
 		// beforeCall runs during the n-th listing, before it reads the directory, so a spec can
 		// change the day between the read and the check rather than only before the read.
 		beforeCall := func(n int, during func()) {

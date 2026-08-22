@@ -430,7 +430,7 @@ var _ = Describe("PurgeToFreeSpace", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(DaySegmentPaths(dir, old)).To(Equal(segments),
 			"nothing was unlinked, so the day must be left exactly as it was")
-		seq, readErr := ReadDay(dir, old)
+		seq, _, readErr := ReadDay(dir, old)
 		Expect(readErr).ToNot(HaveOccurred())
 		Expect(collectIDs(seq)).To(ConsistOf("a", "b"))
 		Expect(out).To(ContainSubstring(old.Format(consts.DateFormat)))

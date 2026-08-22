@@ -1,6 +1,7 @@
 package store
 
 import (
+	"os"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -157,5 +158,59 @@ var _ = Describe("LastPerID", func() {
 			ids = append(ids, d.InsightsID)
 		}
 		Expect(ids).To(ConsistOf("a", "b"))
+	})
+
+	// Both passes must walk one snapshot. Pass 2 finds its winners by position in the
+	// concatenated day, so a segment that leaves the listing between the passes shifts every
+	// later position onto a different record instead of merely removing its own.
+	It("reports a segment that goes away between the two passes", func() {
+		writeDay(dir, testDay, "a", "b")
+		writeDay(dir, testDay, "c")
+
+		// Pass 1 runs here, over both segments.
+		seq, incomplete, err := LastPerID(dir, testDay)
+		Expect(err).ToNot(HaveOccurred())
+
+		paths := DaySegmentPaths(dir, testDay)
+		Expect(paths).To(HaveLen(2))
+		Expect(os.Remove(paths[0])).To(Succeed())
+
+		for range seq { //nolint:revive // draining is the point; the verdict is what is asserted
+		}
+
+		Expect(incomplete()).To(HaveOccurred(),
+			"pass 2 re-listed the day and read a shorter one without saying so")
+	})
+
+	Describe("reporting lines it could not decode", func() {
+		// A complete, newline-terminated line that is not JSON is not something the writer
+		// produces, so it means a record is gone rather than a payload this reader is too old
+		// to understand.
+		It("reports a malformed line", func() {
+			writeDay(dir, testDay, "a")
+			appendPlainLine(dir, testDay, "{not json")
+
+			seq, incomplete, err := LastPerID(dir, testDay)
+			Expect(err).ToNot(HaveOccurred())
+			for range seq { //nolint:revive // the verdict is what is asserted
+			}
+
+			Expect(incomplete()).To(HaveOccurred())
+		})
+
+		// ingest stores a report without an instance id exactly as it was sent, so these are
+		// routine. Counting them as damage would block a day's summary for good over a payload
+		// that is merely useless.
+		It("reports nothing for a record with no instance id", func() {
+			writeDay(dir, testDay, "a")
+			appendPlainLine(dir, testDay, `{"time":"2026-08-03T00:00:05Z","data":{}}`)
+
+			seq, incomplete, err := LastPerID(dir, testDay)
+			Expect(err).ToNot(HaveOccurred())
+			for range seq { //nolint:revive // the verdict is what is asserted
+			}
+
+			Expect(incomplete()).ToNot(HaveOccurred())
+		})
 	})
 })

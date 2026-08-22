@@ -29,7 +29,15 @@ func readLines(dataFolder string, date time.Time) (iter.Seq[[]byte], func() erro
 	if len(paths) == 0 {
 		return nil, nil, fmt.Errorf("no report segment for %s", date.UTC().Format(consts.DateFormat))
 	}
+	seq, incomplete := readLinesFrom(paths)
+	return seq, incomplete, nil
+}
 
+// readLinesFrom is readLines over a snapshot the caller already holds. Passes that match
+// records by position have to share one snapshot: a segment leaving the listing between two
+// independent listings does not just drop its own records, it shifts every position after it
+// onto a different line.
+func readLinesFrom(paths []string) (iter.Seq[[]byte], func() error) {
 	var incomplete error
 	seq := func(yield func([]byte) bool) {
 		incomplete = nil
@@ -41,7 +49,17 @@ func readLines(dataFolder string, date time.Time) (iter.Seq[[]byte], func() erro
 			}
 		}
 	}
-	return seq, func() error { return incomplete }, nil
+	return seq, func() error { return incomplete }
+}
+
+// decodeFailures turns a count of undecodable lines into the verdict callers carry. A complete,
+// newline-terminated line that is not JSON is not something the writer produces, so it means a
+// record is gone rather than a payload this reader does not understand.
+func decodeFailures(n int) error {
+	if n == 0 {
+		return nil
+	}
+	return fmt.Errorf("%d line(s) could not be decoded", n)
 }
 
 // readSegment streams one segment's lines. The bool is false when the consumer stopped; the
@@ -124,11 +142,14 @@ func ReadDay(dataFolder string, date time.Time) (iter.Seq[Record], func() error,
 	if err != nil {
 		return nil, nil, err
 	}
+	var malformed int
 	seq := func(yield func(Record) bool) {
+		malformed = 0
 		for line := range lines {
 			var rec Record
 			if err := json.Unmarshal(line, &rec); err != nil {
 				log.Printf("Skipping malformed report line: %s", err)
+				malformed++
 				continue
 			}
 			if !yield(rec) {
@@ -136,5 +157,5 @@ func ReadDay(dataFolder string, date time.Time) (iter.Seq[Record], func() error,
 			}
 		}
 	}
-	return seq, incomplete, nil
+	return seq, func() error { return errors.Join(incomplete(), decodeFailures(malformed)) }, nil
 }

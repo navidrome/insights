@@ -40,13 +40,14 @@ func apiKeyMiddleware(next http.Handler) http.Handler {
 // chartsJSONHandler serves the charts.json file this process generates.
 func chartsJSONHandler(dataFolder string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Built from the data folder and two constants, with nothing from the request in it.
 		chartsPath := filepath.Join(dataFolder, consts.ChartDataDir, consts.ChartsJSONFile)
-		if _, err := os.Stat(chartsPath); os.IsNotExist(err) {
+		if _, err := os.Stat(chartsPath); os.IsNotExist(err) { //#nosec G703 -- path is from controlled env var and constants
 			http.Error(w, "Charts data not available", http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		http.ServeFile(w, r, chartsPath)
+		http.ServeFile(w, r, chartsPath) //#nosec G703 -- path is from controlled env var and constants
 	}
 }
 

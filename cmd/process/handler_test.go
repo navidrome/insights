@@ -23,11 +23,9 @@ func markerHandler() http.Handler {
 }
 
 func TestChartsJSONHandlerNotFound(t *testing.T) {
-	t.Chdir(t.TempDir())
-
 	req := httptest.NewRequest(http.MethodGet, "/api/charts", nil)
 	rec := httptest.NewRecorder()
-	chartsJSONHandler()(rec, req)
+	chartsJSONHandler(t.TempDir())(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("got status %d, want 404", rec.Code)
 	}
@@ -93,20 +91,20 @@ func TestAPIKeyMiddlewareNoKeyConfigured(t *testing.T) {
 }
 
 func TestChartsJSONHandlerServesFile(t *testing.T) {
-	t.Chdir(t.TempDir())
+	dir := t.TempDir()
 
-	if err := os.MkdirAll(consts.ChartDataDir, consts.DirPermissions); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, consts.ChartDataDir), consts.DirPermissions); err != nil {
 		t.Fatalf("creating chart dir: %v", err)
 	}
 	const content = `{"totalInstances":1}`
-	path := filepath.Join(consts.ChartDataDir, consts.ChartsJSONFile)
+	path := filepath.Join(dir, consts.ChartDataDir, consts.ChartsJSONFile)
 	if err := os.WriteFile(path, []byte(content), consts.FilePermissions); err != nil {
 		t.Fatalf("writing charts file: %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/charts", nil)
 	rec := httptest.NewRecorder()
-	chartsJSONHandler()(rec, req)
+	chartsJSONHandler(dir)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got status %d, want 200", rec.Code)

@@ -58,10 +58,10 @@ func summarize(dataFolder string, days int) func() error {
 	}
 }
 
-func generateCharts() func() error {
+func generateCharts(dataFolder string) func() error {
 	return func() error {
 		log.Print("Exporting charts JSON")
-		err := charts.ExportChartsJSON(consts.ChartDataDir)
+		err := charts.ExportChartsJSON(dataFolder)
 		if err != nil {
 			log.Printf("Error exporting charts JSON: %v", err)
 		}

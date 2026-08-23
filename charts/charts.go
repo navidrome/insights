@@ -154,9 +154,9 @@ func buildMarkAreaData(gaps []gapRange) [][]opts.MarkAreaData {
 	return areas
 }
 
-func ChartsHandler() http.HandlerFunc {
+func ChartsHandler(dataFolder string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		summaries, err := summary.GetSummaries()
+		summaries, err := summary.GetSummaries(dataFolder)
 		if err != nil {
 			log.Printf("Error loading summaries: %v", err)
 			http.Error(w, "Failed to load data", http.StatusInternalServerError)
@@ -836,9 +836,11 @@ func getTopKeys(m map[string]uint64, n int) []string {
 	return result
 }
 
-// ExportChartsJSON generates a JSON file with all chart configurations
-func ExportChartsJSON(outputDir string) error {
-	summaries, err := summary.GetSummaries()
+// ExportChartsJSON writes charts.json under dataFolder. The output directory is derived here
+// rather than passed in, so every caller lands in the same place.
+func ExportChartsJSON(dataFolder string) error {
+	outputDir := filepath.Join(dataFolder, consts.ChartDataDir)
+	summaries, err := summary.GetSummaries(dataFolder)
 	if err != nil {
 		return err
 	}

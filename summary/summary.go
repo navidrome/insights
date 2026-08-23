@@ -214,7 +214,7 @@ func SummarizeData(dataFolder string, date time.Time) error {
 	}
 
 	// Save summary to file
-	err = SaveSummary(summary, date)
+	err = SaveSummary(dataFolder, summary, date)
 	if err != nil {
 		log.Printf("Error saving summary: %s", err)
 	}

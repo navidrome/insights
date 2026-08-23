@@ -1,9 +1,9 @@
 # Production deployment
 
-`insights.navidrome.org` runs from the home directory of the deploy user (UID 1000):
-`docker-compose.yml`, `Caddyfile` and `update.sh` are copied there, and that same
-directory is the data volume (`.:/app`), so `reports/`, `summaries/` and `web/chartdata/`
-live beside them.
+`docker-compose.yml`, `Caddyfile` and `update.sh` are copied into the deploy directory,
+and that same directory is the data volume (`.:/app`), so `reports/`, `summaries/` and
+`web/chartdata/` live beside them. The compose file runs both services as UID 1000, so
+that directory has to belong to it.
 
 ## The environment
 
@@ -25,9 +25,9 @@ there is no shell in either container: inspect them from the host, not with
 Reports are gzipped NDJSON under `reports/YYYY/MM/reports-YYYY-MM-DD.NNN.ndjson.gz`, one
 segment per writer session. Retention follows free space rather than age: the purge
 deletes whole days, oldest first, only when the volume has less than 500 MiB free, and
-never touches a day younger than 7. At roughly 18 MB a day on a 9.8 GB volume that keeps
-months of history. A `WARNING: ... minimum retention` line means something other than
-reports is filling the disk.
+never touches a day younger than 7. Compressed segments are small enough that this keeps
+months of history rather than a fixed window. A `WARNING: ... minimum retention` line
+means something other than reports is filling the disk.
 
 Two settings are load-bearing and easy to break:
 
@@ -40,7 +40,8 @@ timeouts in `cmd/ingest` means raising this too.
 **The ingest route sets `lb_try_duration 30s`.** Navidrome sends each report once and
 treats a 502 as delivered, so without this every report arriving during a restart is
 lost. Caddy holds a refused connection and retries instead. Measured against an
-eight-second container swap: 75 reports lost without it, none with.
+eight-second container swap, driving a synthetic 10 requests a second: every request
+dropped without it, none with.
 
 ## Setting it up from scratch
 
@@ -98,8 +99,7 @@ Steps 1 and 2 must happen **before** the compose file lands.
 
 Both must pass. Run the first a few minutes in.
 
-1. **Reports are landing** — a segment exists for today and grows at roughly 95
-   lines/minute:
+1. **Reports are landing** — a segment exists for today and its line count grows:
 
    ```bash
    ls -la ~/reports/$(date -u +%Y)/$(date -u +%m)/
@@ -108,8 +108,9 @@ Both must pass. Run the first a few minutes in.
    zcat ~/reports/$(date -u +%Y)/$(date -u +%m)/reports-$(date -u +%F).*.ndjson.gz 2>/dev/null | wc -l
    ```
 
-   Each `ingest` restart opens a new segment, so expect more than one per day. Buffered
-   data is flushed every 30s, so wait at least that long before comparing counts.
+   The second count must exceed the first. Each `ingest` restart opens a new segment, so
+   expect more than one per day. Buffered data is flushed every 30s, so wait at least that
+   long before comparing counts.
 
    **`zcat` will warn `unexpected end of file` and exit non-zero on the newest segment.
    That is normal, not corruption** — `ingest` holds that segment open, so its final gzip
@@ -178,4 +179,5 @@ The old image is kept for rollback and the script prints the command. Do not
 `docker image prune` until the new one has been up for a while.
 
 `lb_try_duration` covers a swap, not an outage: past 30 seconds Caddy gives up and reports
-are lost again. `update.sh ingest` is still better run at a quiet hour than at peak.
+are lost again, and a report is never resent. `update.sh ingest` is still better run at a
+quiet hour than at peak.

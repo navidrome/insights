@@ -32,18 +32,18 @@ var _ = Describe("SaveSummary", func() {
 	}
 
 	It("writes a summary that reads back", func() {
-		Expect(SaveSummary(Summary{NumInstances: 7}, day)).To(Succeed())
+		Expect(SaveSummary(dir, Summary{NumInstances: 7}, day)).To(Succeed())
 
-		summaries, err := GetSummaries()
+		summaries, err := GetSummaries(dir)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(summaries).To(HaveLen(1))
 		Expect(summaries[0].Data.NumInstances).To(Equal(int64(7)))
 	})
 
 	It("leaves no temporary file behind", func() {
-		Expect(SaveSummary(Summary{NumInstances: 7}, day)).To(Succeed())
+		Expect(SaveSummary(dir, Summary{NumInstances: 7}, day)).To(Succeed())
 
-		entries, err := os.ReadDir(filepath.Dir(SummaryFilePath(day)))
+		entries, err := os.ReadDir(filepath.Dir(SummaryFilePath(dir, day)))
 		Expect(err).ToNot(HaveOccurred())
 		var names []string
 		for _, e := range entries {
@@ -57,8 +57,8 @@ var _ = Describe("SaveSummary", func() {
 	It("never exposes a half-written summary to a concurrent reader", func() {
 		const keys = 20000
 		summary := bigSummary(keys)
-		Expect(SaveSummary(summary, day)).To(Succeed())
-		path := SummaryFilePath(day)
+		Expect(SaveSummary(dir, summary, day)).To(Succeed())
+		path := SummaryFilePath(dir, day)
 
 		// SaveSummary resolves DATA_FOLDER per call, so a leaked writer would save into the
 		// next spec's temp dir.
@@ -77,7 +77,7 @@ var _ = Describe("SaveSummary", func() {
 					return
 				default:
 				}
-				Expect(SaveSummary(summary, day)).To(Succeed())
+				Expect(SaveSummary(dir, summary, day)).To(Succeed())
 			}
 		}()
 

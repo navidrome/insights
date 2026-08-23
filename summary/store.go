@@ -19,8 +19,7 @@ type SummaryRecord struct {
 	Data Summary
 }
 
-func SummaryFilePath(t time.Time) string {
-	dataFolder := os.Getenv("DATA_FOLDER")
+func SummaryFilePath(dataFolder string, t time.Time) string {
 	return filepath.Join(
 		dataFolder,
 		consts.SummariesDir,
@@ -30,8 +29,8 @@ func SummaryFilePath(t time.Time) string {
 	)
 }
 
-func SaveSummary(summary Summary, t time.Time) error {
-	filePath := SummaryFilePath(t)
+func SaveSummary(dataFolder string, summary Summary, t time.Time) error {
+	filePath := SummaryFilePath(dataFolder, t)
 
 	// Create directory structure if needed
 	dir := filepath.Dir(filePath)
@@ -53,8 +52,7 @@ func SaveSummary(summary Summary, t time.Time) error {
 // summaryFileRegex matches files like "summary-2025-11-29.json"
 var summaryFileRegex = regexp.MustCompile(`^summary-(\d{4}-\d{2}-\d{2})\.json$`)
 
-func GetSummaries() ([]SummaryRecord, error) {
-	dataFolder := os.Getenv("DATA_FOLDER")
+func GetSummaries(dataFolder string) ([]SummaryRecord, error) {
 	baseDir := filepath.Join(dataFolder, consts.SummariesDir)
 
 	var summaries []SummaryRecord

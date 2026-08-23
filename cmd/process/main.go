@@ -45,7 +45,7 @@ func main() {
 	// scheduled path below logs and carries on instead: a cron job that exits kills the worker.
 	if *once {
 		sumErr := summarize(dataFolder, *days)()
-		chartErr := generateCharts()()
+		chartErr := generateCharts(dataFolder)()
 		if err := errors.Join(sumErr, chartErr); err != nil {
 			log.Fatalf("Backfill failed: %v", err)
 		}
@@ -63,7 +63,7 @@ func main() {
 
 	go func() {
 		_ = summarize(dataFolder, *days)()
-		_ = generateCharts()()
+		_ = generateCharts(dataFolder)()
 	}()
 
 	r := chi.NewRouter()
@@ -71,10 +71,10 @@ func main() {
 	r.Use(middleware.Logger)
 
 	r.Get("/healthz", healthzHandler())
-	r.With(apiKeyMiddleware).Get("/api/charts", chartsJSONHandler())
+	r.With(apiKeyMiddleware).Get("/api/charts", chartsJSONHandler(dataFolder))
 
 	// Dev-only routes (static files and server-rendered charts)
-	registerDevRoutes(r)
+	registerDevRoutes(r, dataFolder)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -183,7 +183,7 @@ func newScheduler(dataFolder string, days int) (*cron.Cron, error) {
 	if _, err := c.AddFunc(consts.CronSummarize, forCron(summarize(dataFolder, days))); err != nil {
 		return nil, err
 	}
-	if _, err := c.AddFunc(consts.CronGenerateChart, forCron(generateCharts())); err != nil {
+	if _, err := c.AddFunc(consts.CronGenerateChart, forCron(generateCharts(dataFolder))); err != nil {
 		return nil, err
 	}
 	if _, err := c.AddFunc(consts.CronCleanup, forCron(cleanup(dataFolder))); err != nil {

@@ -106,9 +106,14 @@ Every change so far has been read-side. A format change means `both`.
 The old image is left in place for rollback, and the script prints the command. Do not
 `docker image prune` until the new one has been up for a while.
 
-Reports arriving while `ingest` is down are lost, not retried: Navidrome sends once and
-a 502 is a dropped report. At ~95 reports a minute, a ten-second swap costs about
-16 of them, so `update.sh ingest` is a quiet-hour job.
+Reports arriving while `ingest` is down used to be lost outright: Navidrome sends each
+one once and treats a 502 as delivered. `Caddyfile` now gives the ingest route
+`lb_try_duration 30s`, so Caddy holds a report whose connection was refused and retries
+until the new container answers. Measured against an eight-second swap: 75 reports lost
+before, none after.
+
+That covers a swap, not an outage. Past 30s Caddy gives up and the reports are gone
+again, so `update.sh ingest` is still better run at a quiet hour than at peak.
 
 ## Post-deploy checks
 

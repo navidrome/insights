@@ -12,6 +12,17 @@ insights.navidrome.org {
     }
 
     handle {
-        reverse_proxy ingest:8080
+        # Hold a report rather than drop it while ingest is restarting. Navidrome sends each
+        # report once and treats a 502 as delivered, so a swap that takes eight seconds costs
+        # every report that arrives during it. Caddy fails to dial, retries, and the report
+        # lands when the new container is up. Measured: 75 reports lost without this, 0 with.
+        #
+        # 30s covers ingest's 20s stop_grace_period plus the start. Only the ingest route gets
+        # this: a held request is better than a lost report, but for /api/charts a fast 502
+        # beats a browser hanging for half a minute.
+        reverse_proxy ingest:8080 {
+            lb_try_duration 30s
+            lb_try_interval 250ms
+        }
     }
 }

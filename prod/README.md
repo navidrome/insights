@@ -52,10 +52,10 @@ Do these in order. Steps 1 and 2 must happen **before** the new compose file lan
    this repository on the server:
 
    ```bash
-   cd /path/to/insights/prod && cp docker-compose.yml Caddyfile ~/
+   cd /path/to/insights/prod && cp docker-compose.yml Caddyfile update.sh ~/
    ```
 
-   Both files in that directory are production-ready as-is: the staging ACME block in
+   All three are production-ready as-is: the staging ACME block in
    `Caddyfile` is commented out. If you ever uncomment it to test issuance, re-comment it
    before deploying — staging certificates are not publicly trusted.
 
@@ -74,6 +74,41 @@ Do these in order. Steps 1 and 2 must happen **before** the new compose file lan
    `~/web/chartdata/charts.json` from an ever more stale `insights.db` — the same paths the
    new `process` writes. Expect `docker compose ps` to list exactly `caddy`, `ingest` and
    `process`; if `insights` is still there, stop and remove it before going further.
+
+## Routine updates
+
+`update.sh` upgrades one service and leaves the other running:
+
+```bash
+cd ~ && ./update.sh            # process only, the usual case
+cd ~ && ./update.sh ingest     # collector, loses reports during the swap
+cd ~ && ./update.sh both
+```
+
+Both services run the same image tag, differing by `command`, `stop_grace_period` and
+environment, so `docker compose pull` moves the tag for both. A container keeps the
+image it started with, so recreating only `process` leaves collection untouched.
+`update.sh` prints which container was replaced and which was not, so that is visible
+rather than assumed, and it health-checks each service on its own route: `/api/charts`
+for `process`, `/healthz` for `ingest`.
+
+**Never run `docker compose pull && docker compose up -d` for an update.** Compose
+recreates a service whose resolved image no longer matches its running container, so
+after a pull that is both of them, and `ingest` moves onto the new build as a side
+effect. That pair is right for the cutover above, where everything is being replaced on
+purpose, and wrong afterwards. `update.sh` uses `up -d --no-deps <service>`. (A bare
+`up -d` with nothing newly pulled is a no-op; the pull is what arms it.)
+
+Upgrading `process` alone is safe as long as the change does not alter the on-disk
+report format, since the new worker reads segments the old collector is still writing.
+Every change so far has been read-side. A format change means `both`.
+
+The old image is left in place for rollback, and the script prints the command. Do not
+`docker image prune` until the new one has been up for a while.
+
+Reports arriving while `ingest` is down are lost, not retried: Navidrome sends once and
+a 502 is a dropped report. At ~95 reports a minute, a ten-second swap costs about
+16 of them, so `update.sh ingest` is a quiet-hour job.
 
 ## Post-deploy checks
 
@@ -117,8 +152,15 @@ Both must pass. Run the first a few minutes after deploying.
    should print a non-zero length), means the running `process` has a different key than
    `~/.env` holds — most likely it was started from another directory, since compose reads
    the `.env` next to the compose file. Compare with
-   `cd ~ && docker compose exec process env | grep API_KEY` and restart it from `~` if they
-   differ. A `200` on the second call means `/api/charts` is unauthenticated — stop and fix
+
+   ```bash
+   docker inspect "$(docker compose ps -q process)" \
+     --format '{{range .Config.Env}}{{println .}}{{end}}' | grep API_KEY
+   ```
+
+   and restart it from `~` if they differ. Read it from the host like this rather than with
+   `docker compose exec`: the image is `FROM scratch` and holds three Go binaries and nothing
+   else, so there is no shell and no `env` to exec. A `200` on the second call means `/api/charts` is unauthenticated — stop and fix
    before leaving it running.
 
 ## After the cutover

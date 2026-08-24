@@ -15,7 +15,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-IMAGE="ghcr.io/navidrome/insights:main"
+# Derived, not hardcoded, so it cannot drift from the compose file it is upgrading.
+IMAGE="$(sed -n 's|.*image: *\(ghcr.io/navidrome/insights:[^ ]*\).*|\1|p' docker-compose.yml | head -1)"
 BASE_URL="${BASE_URL:-https://insights.navidrome.org}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-60}"
 
@@ -53,8 +54,7 @@ die() { echo "update: $*" >&2; exit 1; }
 # Every compose command evaluates the API_KEY guard in the compose file, so a missing
 # .env fails even `ps`, not just `up`.
 [ -f .env ] || die ".env is missing. Without it every compose command fails, ps included."
-grep -q "$IMAGE" docker-compose.yml ||
-	die "docker-compose.yml does not mention $IMAGE. This script is out of date with it."
+[ -n "$IMAGE" ] || die "docker-compose.yml names no ghcr.io/navidrome/insights image."
 
 # Read the key without sourcing .env. Compose's dotenv parser and bash disagree: an
 # unquoted value with a space makes bash try to run the rest of the line, and under

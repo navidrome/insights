@@ -393,10 +393,7 @@ func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
 	var data []opts.PieData
 	var othersCount uint64
 	for playerType, count := range latest.Data.PlayerTypes {
-		// The summary writer collapses its own tail under the same label, so an incoming
-		// consts.OthersLabel joins this bucket rather than becoming a slice of its own — two
-		// slices with one name otherwise.
-		if playerType == consts.OthersLabel || float64(count) < threshold {
+		if float64(count) < threshold {
 			othersCount += count
 		} else {
 			data = append(data, opts.PieData{Name: playerType, Value: count})

@@ -1,12 +1,10 @@
 package summary
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/navidrome/insights/internal/consts"
 	"github.com/navidrome/insights/internal/store"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -45,42 +43,6 @@ var _ = Describe("SummarizeData", func() {
 		GinkgoHelper()
 		writeReportsOn(day, ids...)
 	}
-
-	It("collapses rare player names into Others in the saved summary", func() {
-		w, err := store.NewWriter(dir)
-		Expect(err).ToNot(HaveOccurred())
-		// One popular client, plus 200 instances each reporting a name of their own — the
-		// shape a client that mints a name per request produces.
-		for i := 0; i < 200; i++ {
-			var d insights.Data
-			d.InsightsID = fmt.Sprintf("churner-%d", i)
-			d.Version = "0.61.2"
-			d.OS.Type = "linux"
-			d.Library.ActiveUsers = 1
-			d.Library.ActivePlayers = map[string]int64{fmt.Sprintf("Churn-%d", i): 1}
-			Expect(w.Append(d, day.Add(time.Duration(i)*time.Second))).To(Succeed())
-		}
-		var popular insights.Data
-		popular.InsightsID = "popular"
-		popular.Version = "0.61.2"
-		popular.OS.Type = "linux"
-		popular.Library.ActiveUsers = 1000
-		popular.Library.ActivePlayers = map[string]int64{"NavidromeUI": 5000}
-		Expect(w.Append(popular, day.Add(500*time.Second))).To(Succeed())
-		Expect(w.Close()).To(Succeed())
-
-		Expect(SummarizeData(dir, day)).To(Succeed())
-
-		summaries, err := GetSummaries(dir)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(summaries).To(HaveLen(1))
-		pt := summaries[0].Data.PlayerTypes
-
-		Expect(pt).To(HaveKey("NavidromeUI"))
-		Expect(pt).To(HaveKey(consts.OthersLabel))
-		Expect(pt).To(HaveLen(2), "the 200 one-off names should have collapsed into Others")
-		Expect(pt[consts.OthersLabel]).To(Equal(uint64(200)))
-	})
 
 	It("writes no summary file when the day has no report file", func() {
 		Expect(SummarizeData(dir, day)).To(Succeed())

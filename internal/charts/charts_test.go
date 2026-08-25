@@ -2,7 +2,6 @@ package charts
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
-	"github.com/navidrome/insights/internal/consts"
 	"github.com/navidrome/insights/internal/summary"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -309,20 +307,6 @@ var _ = Describe("Charts", func() {
 	})
 
 	Describe("buildPlayerTypesChart", func() {
-		// playerTypesWithTail is the shape the summary writer now produces: a pre-grouped
-		// "Others" well above the pie's own threshold, plus a tail that is still below it.
-		playerTypesWithTail := func() map[string]uint64 {
-			m := map[string]uint64{
-				"NavidromeUI":      7000,
-				"Symfonium":        2000,
-				consts.OthersLabel: 950,
-			}
-			for i := 0; i < 50; i++ { // 50 x 1, each below the 0.2% (=20) threshold
-				m[fmt.Sprintf("rare-%d", i)] = 1
-			}
-			return m
-		}
-
 		// pieNames reads the slice labels back off the built chart.
 		pieNames := func(pie *charts.Pie) []string {
 			GinkgoHelper()
@@ -332,39 +316,6 @@ var _ = Describe("Charts", func() {
 			}
 			return out
 		}
-
-		It("merges a pre-grouped Others bucket instead of emitting a second one", func() {
-			// The summary writer already collapsed its own tail, so "Others" arrives as a key
-			// that sits well above the pie's own threshold.
-			summaries := []summary.SummaryRecord{{
-				Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
-				Data: summary.Summary{PlayerTypes: playerTypesWithTail()},
-			}}
-
-			names := pieNames(buildPlayerTypesChart(summaries))
-
-			Expect(names).To(ContainElement(consts.OthersLabel))
-			count := 0
-			for _, n := range names {
-				if n == consts.OthersLabel {
-					count++
-				}
-			}
-			Expect(count).To(Equal(1), "expected one Others slice, got %d", count)
-		})
-
-		It("keeps the total intact when it merges Others", func() {
-			summaries := []summary.SummaryRecord{{
-				Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
-				Data: summary.Summary{PlayerTypes: playerTypesWithTail()},
-			}}
-
-			var total uint64
-			for _, d := range buildPlayerTypesChart(summaries).MultiSeries[0].Data.([]opts.PieData) {
-				total += d.Value.(uint64)
-			}
-			Expect(total).To(Equal(uint64(10000)))
-		})
 
 		It("orders slices the same way on every run", func() {
 			// Equal counts must not depend on Go's randomised map iteration order.

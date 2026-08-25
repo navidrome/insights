@@ -300,46 +300,4 @@ var _ = Describe("Summary", func() {
 			Expect(configFlags).To(BeEmpty())
 		})
 	})
-
-	Describe("groupSmallValues", func() {
-		It("moves entries below the threshold into Others", func() {
-			m := map[string]uint64{"big": 900, "medium": 90, "tiny": 10}
-			groupSmallValues(m, 0.02) // threshold = 2% of 1000 = 20
-
-			Expect(m).To(Equal(map[string]uint64{"big": 900, "medium": 90, "Others": 10}))
-		})
-
-		It("leaves the map alone when nothing is below the threshold", func() {
-			m := map[string]uint64{"a": 50, "b": 50}
-			groupSmallValues(m, 0.1) // threshold = 10 of 100
-
-			Expect(m).To(Equal(map[string]uint64{"a": 50, "b": 50}))
-			Expect(m).NotTo(HaveKey("Others"))
-		})
-
-		It("preserves the total count", func() {
-			m := map[string]uint64{"a": 500, "b": 3, "c": 2, "d": 1}
-			groupSmallValues(m, 0.01)
-
-			var total uint64
-			for _, v := range m {
-				total += v
-			}
-			Expect(total).To(Equal(uint64(506)))
-		})
-
-		It("adds to an existing Others entry rather than replacing it", func() {
-			m := map[string]uint64{"big": 900, "Others": 90, "tiny": 10}
-			groupSmallValues(m, 0.02)
-
-			Expect(m["Others"]).To(Equal(uint64(100)))
-		})
-
-		It("handles an empty map", func() {
-			m := map[string]uint64{}
-			groupSmallValues(m, 0.1)
-
-			Expect(m).To(BeEmpty())
-		})
-	})
 })

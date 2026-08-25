@@ -15,9 +15,9 @@ import (
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/components"
 	"github.com/go-echarts/go-echarts/v2/opts"
-	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/internal/consts"
 	"github.com/navidrome/insights/internal/fsutil"
-	"github.com/navidrome/insights/summary"
+	"github.com/navidrome/insights/internal/summary"
 )
 
 // ExcludeIncompleteDays removes any trailing days when the instance count drops significantly

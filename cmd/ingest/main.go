@@ -17,8 +17,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httprate"
-	"github.com/navidrome/insights/consts"
-	"github.com/navidrome/insights/store"
+	"github.com/navidrome/insights/internal/consts"
+	"github.com/navidrome/insights/internal/store"
 )
 
 // shutdownTimeout bounds how long in-flight reports have to finish once a signal arrives.

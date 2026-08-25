@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/internal/consts"
 	"github.com/robfig/cron/v3"
 )
 

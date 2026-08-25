@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/navidrome/insights/internal/store"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/navidrome/insights/store"
 	"github.com/navidrome/navidrome/core/metrics/insights"
 )
 

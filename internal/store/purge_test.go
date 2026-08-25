@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/internal/consts"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )

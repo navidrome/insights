@@ -4,8 +4,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/navidrome/insights/consts"
 	"time"
+
+	"github.com/navidrome/insights/internal/consts"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

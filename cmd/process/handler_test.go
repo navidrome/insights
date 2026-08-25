@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/internal/consts"
 )
 
 // nextMarker tells "next was called" apart from "nothing happened", since NewRecorder starts

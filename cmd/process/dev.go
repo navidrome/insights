@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/navidrome/insights/charts"
-	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/internal/charts"
+	"github.com/navidrome/insights/internal/consts"
 )
 
 func registerDevRoutes(r chi.Router, dataFolder string) {

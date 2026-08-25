@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/internal/consts"
 )
 
 // readLines streams a day's segments as one continuous sequence, oldest first. Only complete

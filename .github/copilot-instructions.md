@@ -9,10 +9,10 @@ cmd/ingest/           → HTTP server accepting reports: /collect (handler.go), 
 cmd/process/          → Cron worker (tasks.go) + /api/charts, /healthz (handler.go)
 cmd/monitor/          → CLI reporting on one UTC day of collected reports
 cmd/regenerate-charts/→ CLI to rebuild charts.json from existing summaries
-store/                → Raw report storage: gzipped NDJSON segments (writer.go, reader.go,
+internal/store/       → Raw report storage: gzipped NDJSON segments (writer.go, reader.go,
                         lastperid.go, purge.go)
-summary/              → Aggregation logic (summary.go) and file storage (store.go)
-charts/               → Chart generation using go-echarts, exports to JSON
+internal/summary/     → Aggregation logic (summary.go) and file storage (store.go)
+internal/charts/      → Chart generation using go-echarts, exports to JSON
 web/                  → Static frontend (index.html consumes chartdata/charts.json)
 ```
 
@@ -21,7 +21,7 @@ worker never interrupts collection. Both run from the same `DATA_FOLDER`.
 
 ### Data Flow
 
-1. Navidrome POSTs to `/collect` (rate-limited: 1 req/30min per IP) → `ingest` appends a JSON
+1. Navidrome POSTs to `/collect` (rate-limited: 10 req/30min per IP) → `ingest` appends a JSON
    line to `reports/YYYY/MM/reports-YYYY-MM-DD.NNN.ndjson.gz`
 2. Cron every 2h: `summary.SummarizeData()` aggregates the last 5 days →
    `summaries/YYYY/MM/summary-YYYY-MM-DD.json`
@@ -62,7 +62,7 @@ The `make dev` command automatically uses `-tags dev` via reflex.
 
 ## Key Patterns
 
-### Regex-Based Normalization (`summary/summary.go`)
+### Regex-Based Normalization (`internal/summary/summary.go`)
 
 Player names normalized via regex map. Empty string = discard:
 
@@ -90,7 +90,7 @@ Removes trailing days where instance count drops >20% (indicates incomplete coll
 
 **Ginkgo/Gomega BDD framework**. Key patterns:
 
-- Use `DescribeTable` for parameterized tests (see `summary/summary_test.go`)
+- Use `DescribeTable` for parameterized tests (see `internal/summary/summary_test.go`)
 - Define local type aliases to construct `insights.Data`:
   ```go
   type insightsOS struct { Type string; Arch string; Containerized bool }

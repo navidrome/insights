@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/internal/consts"
 	"github.com/navidrome/navidrome/core/metrics/insights"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

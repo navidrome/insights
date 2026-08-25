@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/internal/consts"
 )
 
 // reportFileRegex matches segment files like "reports-2026-08-03.001.ndjson.gz". The ".gz" is

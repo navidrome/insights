@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/navidrome/insights/summary"
+	"github.com/navidrome/insights/internal/summary"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )

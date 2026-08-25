@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/navidrome/insights/store"
+	"github.com/navidrome/insights/internal/store"
 	"github.com/navidrome/navidrome/core/metrics/insights"
 )
 

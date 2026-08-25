@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/internal/consts"
 )
 
 // writeSegment puts content at the path a real segment of date would occupy, so the listing

@@ -10,7 +10,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/navidrome/insights/consts"
+	"github.com/navidrome/insights/internal/consts"
 	"github.com/navidrome/insights/internal/fsutil"
 )
 

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/navidrome/insights/consts"
-	"github.com/navidrome/insights/store"
+	"github.com/navidrome/insights/internal/consts"
+	"github.com/navidrome/insights/internal/store"
 	"github.com/navidrome/navidrome/core/metrics/insights"
 )
 

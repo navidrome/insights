@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/navidrome/insights/charts"
+	"github.com/navidrome/insights/internal/charts"
 )
 
 func main() {

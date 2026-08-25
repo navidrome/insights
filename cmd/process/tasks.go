@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/navidrome/insights/charts"
-	"github.com/navidrome/insights/consts"
-	"github.com/navidrome/insights/store"
-	"github.com/navidrome/insights/summary"
+	"github.com/navidrome/insights/internal/charts"
+	"github.com/navidrome/insights/internal/consts"
+	"github.com/navidrome/insights/internal/store"
+	"github.com/navidrome/insights/internal/summary"
 )
 
 // cleanup keeps free space above consts.MinFreeBytes by deleting the oldest report days. It is

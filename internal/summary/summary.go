@@ -213,6 +213,11 @@ func SummarizeData(dataFolder string, date time.Time) error {
 		return nil
 	}
 
+	// Client names are free text, and a client that mints a new one per request would otherwise
+	// add a key per request to every summary from here on. Collapsing the tail before the file
+	// is written keeps the summary bounded no matter what clients report.
+	groupSmallValues(summary.PlayerTypes, consts.PlayerTypesGroupThreshold)
+
 	// Save summary to file
 	err = SaveSummary(dataFolder, summary, date)
 	if err != nil {
@@ -471,4 +476,25 @@ func mapFS(fs *insights.FSInfo) string {
 		return t
 	}
 	return strings.ToLower(fs.Type)
+}
+
+// groupSmallValues folds every entry below frac of the total into a single consts.OthersLabel
+// bucket, in place. The total is preserved, so callers that sum the map are unaffected.
+func groupSmallValues(m map[string]uint64, frac float64) {
+	var total uint64
+	for _, v := range m {
+		total += v
+	}
+	threshold := float64(total) * frac
+
+	var others uint64
+	for k, v := range m {
+		if float64(v) < threshold {
+			others += v
+			delete(m, k)
+		}
+	}
+	if others > 0 {
+		m[consts.OthersLabel] += others
+	}
 }

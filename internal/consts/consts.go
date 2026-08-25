@@ -80,7 +80,16 @@ const (
 	VersionSelectionDays = 60    // Rolling window (in days) for top-N version selection
 	IncompleteThreshold  = 0.8   // 20% drop indicates incomplete data
 	PlayerGroupThreshold = 0.002 // 0.2% threshold for grouping players
+
+	// PlayerTypesGroupThreshold is applied when the summary is written, not when the chart is
+	// drawn. Kept below PlayerGroupThreshold so the pie still decides its own slices from data
+	// the summary preserved.
+	PlayerTypesGroupThreshold = 0.001 // 0.1%
 )
+
+// OthersLabel is the bucket that low-count entries collapse into. Shared so the summary writer
+// and the pie chart agree on one name instead of each appending its own.
+const OthersLabel = "Others"
 
 // Chart colors and styling
 const (

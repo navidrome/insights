@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"time"
 
 	"github.com/go-echarts/go-echarts/v2/charts"
@@ -336,10 +335,7 @@ func buildOSChart(summaries []summary.SummaryRecord) *charts.Pie {
 		data = append(data, opts.PieData{Name: os, Value: count})
 	}
 
-	// Sort data by value descending
-	sort.Slice(data, func(i, j int) bool {
-		return data[i].Value.(uint64) > data[j].Value.(uint64)
-	})
+	sortPieDataByValue(data)
 
 	pie := charts.NewPie()
 	pie.SetGlobalOptions(
@@ -397,20 +393,20 @@ func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
 	var data []opts.PieData
 	var othersCount uint64
 	for playerType, count := range latest.Data.PlayerTypes {
-		if float64(count) < threshold {
+		// The summary writer collapses its own tail under the same label, so an incoming
+		// consts.OthersLabel joins this bucket rather than becoming a slice of its own — two
+		// slices with one name otherwise.
+		if playerType == consts.OthersLabel || float64(count) < threshold {
 			othersCount += count
 		} else {
 			data = append(data, opts.PieData{Name: playerType, Value: count})
 		}
 	}
 	if othersCount > 0 {
-		data = append(data, opts.PieData{Name: "Others", Value: othersCount})
+		data = append(data, opts.PieData{Name: consts.OthersLabel, Value: othersCount})
 	}
 
-	// Sort data by value descending
-	sort.Slice(data, func(i, j int) bool {
-		return data[i].Value.(uint64) > data[j].Value.(uint64)
-	})
+	sortPieDataByValue(data)
 
 	pie := charts.NewPie()
 	pie.SetGlobalOptions(
@@ -917,4 +913,16 @@ func ExportChartsJSON(dataFolder string) error {
 
 	log.Printf("Exported charts to %s", outputPath)
 	return nil
+}
+
+// sortPieDataByValue orders slices by count descending, breaking ties on the name. The name is
+// what makes it a total order: the data comes from a map, so Go hands it over in a different
+// order every run, and without the tiebreak equal counts reshuffle charts.json for no reason.
+func sortPieDataByValue(data []opts.PieData) {
+	slices.SortFunc(data, func(a, b opts.PieData) int {
+		if c := cmp.Compare(b.Value.(uint64), a.Value.(uint64)); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Name, b.Name)
+	})
 }

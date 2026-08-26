@@ -3,6 +3,15 @@ services:
     image: ghcr.io/navidrome/insights:main
     command: ["/ingest"]
     restart: unless-stopped
+    # ingest logs every request with its client IP, which measured 19 MB a day in production.
+    # The json-file driver keeps everything by default, and the purge measures free space on the
+    # whole volume, so an unrotated log makes it delete report days to make room for log files.
+    # 30 MB is enough to debug a bad deploy and small enough to stay out of the purge's way.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     user: "1000:1000"
     # Longer than the shutdown budget: ingest gives in-flight reports 10s to finish, then up to
     # 5s more for any handler the shutdown deadline gave up on, and only then closes the report
@@ -21,6 +30,11 @@ services:
     image: ghcr.io/navidrome/insights:main
     command: ["/process"]
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     user: "1000:1000"
     # Longer than the shutdown budget: process gives in-flight requests 10s, then up to 30s
     # more for a background job that was already running. The purge is the one that matters —
@@ -41,6 +55,11 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "80:80"
       - "443:443"

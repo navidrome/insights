@@ -152,7 +152,8 @@ var _ = Describe("Charts", func() {
 				Players:      map[string]uint64{"0": 10, "1": 50, "2": 30},
 				Tracks:       map[string]uint64{"0": 5, "1000": 40, "10000": 30},
 			}
-			// Insert 3 days of data (last 2 are excluded)
+			// Insert 3 days of data; NumInstances is the same every day, so trimIncomplete's
+			// cliff check never fires and all three survive.
 			err := summary.SaveSummary(tempDir, s, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
 			err = summary.SaveSummary(tempDir, s, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))

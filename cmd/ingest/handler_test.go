@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +57,41 @@ func TestCollectWritesRecord(t *testing.T) {
 		t.Fatalf("got %v, want [test-instance]", ids)
 	}
 	_ = os.RemoveAll(dir)
+}
+
+// A malformed payload is the one failure that says a client is sending something wrong, and it
+// was the only one the handler answered without recording. The access log carries the status but
+// never the reason, so a Navidrome release that started sending a bad field would 400 every
+// affected instance in silence.
+func TestCollectLogsWhyAPayloadWasRejected(t *testing.T) {
+	dir := t.TempDir()
+	w, err := store.NewWriter(dir)
+	if err != nil {
+		t.Fatalf("creating writer: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(os.Stderr)
+		log.SetFlags(log.LstdFlags)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/collect", strings.NewReader(`{"version": 42}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler(w)(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400", rec.Code)
+	}
+	// The reason, not just that something failed: "version" is what tells you which field the
+	// client got wrong, and it is the whole point of logging this at all.
+	if got := logged.String(); !strings.Contains(got, "version") {
+		t.Fatalf("log does not name the offending field.\ngot: %q", got)
+	}
 }
 
 func TestHealthz(t *testing.T) {

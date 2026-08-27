@@ -18,6 +18,10 @@ func handler(w *store.Writer) http.HandlerFunc {
 		if err != nil {
 			var mr *malformedRequest
 			if errors.As(err, &mr) {
+				// The client is told what was wrong with its payload; log it here too. A release
+				// that starts sending a bad field otherwise fails every affected instance in
+				// silence, visible only as a status code in the access log.
+				log.Printf("Rejected payload: %s", mr.msg) //#nosec G706 -- the message is built from a fixed set of decode errors
 				http.Error(rw, mr.msg, mr.status)
 			} else {
 				log.Printf("error decoding payload: %s", err.Error()) //#nosec G706 -- error message is safe

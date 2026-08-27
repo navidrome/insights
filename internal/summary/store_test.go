@@ -132,15 +132,20 @@ var _ = Describe("SaveSummary", func() {
 		BeforeEach(func() { dir = GinkgoT().TempDir() })
 
 		It("yields days oldest first", func() {
-			write("2026/03/summary-2026-03-02.json", Summary{NumInstances: 2})
-			write("2026/01/summary-2026-01-31.json", Summary{NumInstances: 1})
-			write("2026/03/summary-2026-03-01.json", Summary{NumInstances: 3})
+			// summaryPathRegex reads the date from the file name only and never checks it
+			// against the surrounding YYYY/MM directory, so a mismatched pair like these two
+			// makes path order (lexical, by directory) and date order genuinely disagree:
+			// "2024/01/..." sorts before "2024/02/..." as paths, but the date inside the first
+			// file is the latest of the three and the date inside the second is the earliest.
+			write("2024/01/summary-2026-05-01.json", Summary{NumInstances: 1}) // late date, early dir
+			write("2024/02/summary-2021-01-01.json", Summary{NumInstances: 2}) // early date, later dir
+			write("2025/01/summary-2025-06-01.json", Summary{NumInstances: 3}) // dir matches its date
 
 			var dates []string
 			for _, r := range collect() {
 				dates = append(dates, r.Time.Format(consts.DateFormat))
 			}
-			Expect(dates).To(Equal([]string{"2026-01-31", "2026-03-01", "2026-03-02"}))
+			Expect(dates).To(Equal([]string{"2021-01-01", "2025-06-01", "2026-05-01"}))
 		})
 
 		It("ignores a summary nested below the YYYY/MM layout", func() {
@@ -152,20 +157,25 @@ var _ = Describe("SaveSummary", func() {
 
 		It("can be ranged over more than once", func() {
 			write("2026/01/summary-2026-01-01.json", Summary{NumInstances: 1})
-			write("2026/01/summary-2026-01-02.json", Summary{NumInstances: 2})
 
 			seq, err := GetSummaries(dir)
 			Expect(err).ToNot(HaveOccurred())
 
-			count := func() int {
-				n := 0
-				for range seq {
-					n++
+			read := func() int64 {
+				var n int64
+				for r := range seq {
+					n = r.Data.NumInstances
 				}
 				return n
 			}
-			Expect(count()).To(Equal(2))
-			Expect(count()).To(Equal(2), "a second pass must re-read the files")
+			Expect(read()).To(Equal(int64(1)))
+
+			// Mutate the file on disk between passes: an implementation that decoded once and
+			// replayed a cached slice would still return 1 here, so only a genuine re-read of
+			// the file can make the second pass see 99.
+			write("2026/01/summary-2026-01-01.json", Summary{NumInstances: 99})
+
+			Expect(read()).To(Equal(int64(99)), "a second pass must re-read the files")
 		})
 
 		It("stops early without error when the consumer breaks", func() {

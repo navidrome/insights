@@ -19,35 +19,12 @@ import (
 	"github.com/navidrome/insights/internal/summary"
 )
 
-// ExcludeIncompleteDays removes any trailing days when the instance count drops significantly
-// (more than 20% drop) compared to the previous day, as this indicates incomplete data.
-func ExcludeIncompleteDays(summaries []summary.SummaryRecord) []summary.SummaryRecord {
-	if len(summaries) == 0 {
-		return nil
-	}
-
-	// Remove trailing incomplete data (significant drops from previous day)
-	for len(summaries) > 1 {
-		last := summaries[len(summaries)-1]
-		prev := summaries[len(summaries)-2]
-		if prev.Data.NumInstances > 0 {
-			dropRatio := float64(last.Data.NumInstances) / float64(prev.Data.NumInstances)
-			if dropRatio < consts.IncompleteThreshold { // Detect significant drop
-				summaries = summaries[:len(summaries)-1]
-				continue
-			}
-		}
-		break
-	}
-	return summaries
-}
-
 // timeSeriesData holds a continuous date range with data for each date.
 // Dates without data will have nil in the lookup map.
 type timeSeriesData struct {
-	Dates  []string                             // Continuous date range as formatted strings
-	Lookup map[time.Time]*summary.SummaryRecord // Map from date to summary (nil if missing)
-	Start  time.Time                            // First date in the range
+	Dates  []string                 // Continuous date range as formatted strings
+	Lookup map[time.Time]*daySeries // Map from date to day (nil if missing)
+	Start  time.Time                // First date in the range
 }
 
 // gapRange represents a range of missing data
@@ -56,22 +33,22 @@ type gapRange struct {
 	EndDate   string // Formatted end date of gap
 }
 
-// buildTimeSeriesData creates a continuous date range from the first to last summary,
+// buildTimeSeriesData creates a continuous date range from the first to last day,
 // filling gaps with nil values to show breaks in time series charts.
-func buildTimeSeriesData(summaries []summary.SummaryRecord) timeSeriesData {
-	if len(summaries) == 0 {
+func buildTimeSeriesData(series []daySeries) timeSeriesData {
+	if len(series) == 0 {
 		return timeSeriesData{}
 	}
 
-	// Build lookup map from date to summary
-	lookup := make(map[time.Time]*summary.SummaryRecord, len(summaries))
-	for i := range summaries {
-		lookup[summaries[i].Time] = &summaries[i]
+	// Build lookup map from date to day
+	lookup := make(map[time.Time]*daySeries, len(series))
+	for i := range series {
+		lookup[series[i].Time] = &series[i]
 	}
 
 	// Generate continuous date range
-	start := summaries[0].Time
-	end := summaries[len(summaries)-1].Time
+	start := series[0].Time
+	end := series[len(series)-1].Time
 
 	var dates []string
 	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
@@ -155,15 +132,13 @@ func buildMarkAreaData(gaps []gapRange) [][]opts.MarkAreaData {
 
 func ChartsHandler(dataFolder string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		summaries, err := collectSummaries(dataFolder)
+		in, err := loadChartInput(dataFolder)
 		if err != nil {
 			log.Printf("Error loading summaries: %v", err)
 			http.Error(w, "Failed to load data", http.StatusInternalServerError)
 			return
 		}
-		// Exclude incomplete days (significant drops indicate incomplete data)
-		summaries = ExcludeIncompleteDays(summaries)
-		if len(summaries) == 0 {
+		if len(in.Series) == 0 {
 			http.Error(w, "No data available", http.StatusNotFound)
 			return
 		}
@@ -171,13 +146,13 @@ func ChartsHandler(dataFolder string) http.HandlerFunc {
 		page := components.NewPage()
 		page.PageTitle = "Navidrome Insights"
 		page.AddCharts(
-			buildVersionsChart(summaries),
-			buildOSChart(summaries),
-			buildPlayerTypesChart(summaries),
-			buildPlayersChart(summaries),
-			buildPlayersPerInstallationChart(summaries),
-			buildTracksChart(summaries),
-			buildAlbumsArtistsChart(summaries),
+			buildVersionsChart(in.Series, in.TopVersions),
+			buildOSChart(in.Latest),
+			buildPlayerTypesChart(in.Latest),
+			buildPlayersChart(in.Series),
+			buildPlayersPerInstallationChart(in.Latest),
+			buildTracksChart(in.Latest),
+			buildAlbumsArtistsChart(in.Latest),
 		)
 
 		w.Header().Set("Content-Type", "text/html")
@@ -185,30 +160,11 @@ func ChartsHandler(dataFolder string) http.HandlerFunc {
 	}
 }
 
-func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
+func buildVersionsChart(series []daySeries, top []string) *charts.Line {
 	// Build continuous date range with gaps
-	ts := buildTimeSeriesData(summaries)
-	start := summaries[0].Time
-
-	// Calculate the cutoff date for rolling window (last N calendar days)
-	lastDate := summaries[len(summaries)-1].Time
-	cutoffDate := lastDate.AddDate(0, 0, -consts.VersionSelectionDays)
-
-	// Collect version totals only from the rolling window for top-N selection
-	versionTotals := make(map[string]uint64)
-	for _, s := range summaries {
-		if !s.Time.Before(cutoffDate) {
-			for version, count := range s.Data.Versions {
-				versionTotals[version] += count
-			}
-		}
-	}
-
-	// Get top N versions by total count in the rolling window
-	topVersionsList := getTopKeys(versionTotals, consts.TopVersionsCount)
-
-	lastSummary := summaries[len(summaries)-1]
-	sortVersionsByLastDay(topVersionsList, lastSummary.Data.Versions)
+	ts := buildTimeSeriesData(series)
+	start := series[0].Time
+	topVersionsList := top
 
 	// Create a set of top versions for quick lookup
 	topVersionsSet := make(map[string]bool)
@@ -286,7 +242,7 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 			// Calculate totals for this day
 			var allTotal uint64
 			var othersCount uint64
-			for version, count := range s.Data.Versions {
+			for version, count := range s.Versions {
 				allTotal += count
 				if !topVersionsSet[version] {
 					othersCount += count
@@ -294,7 +250,7 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 			}
 			allData[i] = opts.LineData{Value: allTotal}
 			for _, version := range topVersionsList {
-				versionData[version][i] = opts.LineData{Value: s.Data.Versions[version]}
+				versionData[version][i] = opts.LineData{Value: s.Versions[version]}
 			}
 			othersData[i] = opts.LineData{Value: othersCount}
 		}
@@ -318,15 +274,10 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 	return line
 }
 
-func buildOSChart(summaries []summary.SummaryRecord) *charts.Pie {
-	if len(summaries) == 0 {
-		return nil
-	}
-	latest := summaries[len(summaries)-1]
-
+func buildOSChart(latest summary.Summary) *charts.Pie {
 	// Prepare data
 	var data []opts.PieData
-	for os, count := range latest.Data.OS {
+	for os, count := range latest.OS {
 		data = append(data, opts.PieData{Name: os, Value: count})
 	}
 
@@ -371,15 +322,10 @@ func buildOSChart(summaries []summary.SummaryRecord) *charts.Pie {
 	return pie
 }
 
-func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
-	if len(summaries) == 0 {
-		return nil
-	}
-	latest := summaries[len(summaries)-1]
-
+func buildPlayerTypesChart(latest summary.Summary) *charts.Pie {
 	// Calculate total count
 	var total uint64
-	for _, count := range latest.Data.PlayerTypes {
+	for _, count := range latest.PlayerTypes {
 		total += count
 	}
 
@@ -387,7 +333,7 @@ func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
 	threshold := float64(total) * consts.PlayerGroupThreshold
 	var data []opts.PieData
 	var othersCount uint64
-	for playerType, count := range latest.Data.PlayerTypes {
+	for playerType, count := range latest.PlayerTypes {
 		if float64(count) < threshold {
 			othersCount += count
 		} else {
@@ -439,10 +385,10 @@ func buildPlayerTypesChart(summaries []summary.SummaryRecord) *charts.Pie {
 	return pie
 }
 
-func buildPlayersChart(summaries []summary.SummaryRecord) *charts.Line {
+func buildPlayersChart(series []daySeries) *charts.Line {
 	// Build continuous date range with gaps
-	ts := buildTimeSeriesData(summaries)
-	start := summaries[0].Time
+	ts := buildTimeSeriesData(series)
+	start := series[0].Time
 
 	line := charts.NewLine()
 	line.SetGlobalOptions(
@@ -495,11 +441,7 @@ func buildPlayersChart(summaries []summary.SummaryRecord) *charts.Line {
 		if s == nil {
 			totalData[i] = opts.LineData{Value: nil}
 		} else {
-			var total uint64
-			for _, count := range s.Data.PlayerTypes {
-				total += count
-			}
-			totalData[i] = opts.LineData{Value: total}
+			totalData[i] = opts.LineData{Value: s.TotalPlayers}
 		}
 	}
 
@@ -516,12 +458,7 @@ func buildPlayersChart(summaries []summary.SummaryRecord) *charts.Line {
 	return line
 }
 
-func buildPlayersPerInstallationChart(summaries []summary.SummaryRecord) *charts.Bar {
-	if len(summaries) == 0 {
-		return nil
-	}
-	latest := summaries[len(summaries)-1]
-
+func buildPlayersPerInstallationChart(latest summary.Summary) *charts.Bar {
 	// Define bins for grouping player counts to handle the long tail
 	bins := []struct {
 		label string
@@ -542,7 +479,7 @@ func buildPlayersPerInstallationChart(summaries []summary.SummaryRecord) *charts
 
 	// Aggregate data into bins
 	binValues := make([]uint64, len(bins))
-	for countStr, value := range latest.Data.Players {
+	for countStr, value := range latest.Players {
 		var count int
 		_, _ = fmt.Sscanf(countStr, "%d", &count)
 
@@ -619,12 +556,7 @@ var albumArtistBinLabels = []string{
 	"5,001-10,000", "10,001-50,000", "50,001-100,000", ">100,000",
 }
 
-func buildTracksChart(summaries []summary.SummaryRecord) *charts.Bar {
-	if len(summaries) == 0 {
-		return nil
-	}
-	latest := summaries[len(summaries)-1]
-
+func buildTracksChart(latest summary.Summary) *charts.Bar {
 	// Map bin values to labels, maintaining order from trackBins in summary.go
 	binToLabel := map[string]string{
 		"0":       "0",
@@ -646,7 +578,7 @@ func buildTracksChart(summaries []summary.SummaryRecord) *charts.Bar {
 		var value uint64
 		for binKey, binLabel := range binToLabel {
 			if binLabel == label {
-				value = latest.Data.Tracks[binKey]
+				value = latest.Tracks[binKey]
 				break
 			}
 		}
@@ -700,12 +632,7 @@ func buildTracksChart(summaries []summary.SummaryRecord) *charts.Bar {
 	return bar
 }
 
-func buildAlbumsArtistsChart(summaries []summary.SummaryRecord) *charts.Bar {
-	if len(summaries) == 0 {
-		return nil
-	}
-	latest := summaries[len(summaries)-1]
-
+func buildAlbumsArtistsChart(latest summary.Summary) *charts.Bar {
 	// Map bin values to labels, maintaining order from AlbumBins/ArtistBins in summary.go
 	binToLabel := map[string]string{
 		"0":      "0",
@@ -728,7 +655,7 @@ func buildAlbumsArtistsChart(summaries []summary.SummaryRecord) *charts.Bar {
 		var value uint64
 		for binKey, binLabel := range binToLabel {
 			if binLabel == label {
-				value += latest.Data.Albums[binKey]
+				value += latest.Albums[binKey]
 			}
 		}
 		albumsData[i] = opts.BarData{Value: value}
@@ -740,7 +667,7 @@ func buildAlbumsArtistsChart(summaries []summary.SummaryRecord) *charts.Bar {
 		var value uint64
 		for binKey, binLabel := range binToLabel {
 			if binLabel == label {
-				value += latest.Data.Artists[binKey]
+				value += latest.Artists[binKey]
 			}
 		}
 		artistsData[i] = opts.BarData{Value: value}
@@ -831,37 +758,35 @@ func getTopKeys(m map[string]uint64, n int) []string {
 // rather than passed in, so every caller lands in the same place.
 func ExportChartsJSON(dataFolder string) error {
 	outputDir := filepath.Join(dataFolder, consts.ChartDataDir)
-	summaries, err := collectSummaries(dataFolder)
+	in, err := loadChartInput(dataFolder)
 	if err != nil {
 		return err
 	}
-	// Exclude incomplete days (significant drops indicate incomplete data)
-	summaries = ExcludeIncompleteDays(summaries)
-	if len(summaries) == 0 {
+	if len(in.Series) == 0 {
 		log.Print("No data to export")
 		return nil
 	}
 
 	// Build all charts
-	versionsChart := buildVersionsChart(summaries)
+	versionsChart := buildVersionsChart(in.Series, in.TopVersions)
 	versionsChart.Validate()
 
-	osChart := buildOSChart(summaries)
+	osChart := buildOSChart(in.Latest)
 	osChart.Validate()
 
-	playerTypesChart := buildPlayerTypesChart(summaries)
+	playerTypesChart := buildPlayerTypesChart(in.Latest)
 	playerTypesChart.Validate()
 
-	playersChart := buildPlayersChart(summaries)
+	playersChart := buildPlayersChart(in.Series)
 	playersChart.Validate()
 
-	playersPerInstallationChart := buildPlayersPerInstallationChart(summaries)
+	playersPerInstallationChart := buildPlayersPerInstallationChart(in.Latest)
 	playersPerInstallationChart.Validate()
 
-	tracksChart := buildTracksChart(summaries)
+	tracksChart := buildTracksChart(in.Latest)
 	tracksChart.Validate()
 
-	albumsArtistsChart := buildAlbumsArtistsChart(summaries)
+	albumsArtistsChart := buildAlbumsArtistsChart(in.Latest)
 	albumsArtistsChart.Validate()
 
 	// Combine all charts into a single JSON array to preserve order
@@ -876,10 +801,7 @@ func ExportChartsJSON(dataFolder string) error {
 	}
 
 	// Get the most recent total instances count
-	totalInstances := int64(0)
-	if len(summaries) > 0 {
-		totalInstances = summaries[len(summaries)-1].Data.NumInstances
-	}
+	totalInstances := in.Latest.NumInstances
 
 	// Wrap charts in an object with metadata
 	output := map[string]interface{}{
@@ -932,18 +854,4 @@ func sortVersionsByLastDay(versions []string, lastDay map[string]uint64) {
 		}
 		return cmp.Compare(a, b)
 	})
-}
-
-// collectSummaries materialises every day, which is what the chart builders still take. It is a
-// bridge while the builders move to the slim series, and goes away with them.
-func collectSummaries(dataFolder string) ([]summary.SummaryRecord, error) {
-	seq, err := summary.GetSummaries(dataFolder)
-	if err != nil {
-		return nil, err
-	}
-	var out []summary.SummaryRecord
-	for r := range seq {
-		out = append(out, r)
-	}
-	return out, nil
 }

@@ -752,4 +752,48 @@ var _ = Describe("Charts", func() {
 		})
 	})
 
+	Describe("getTopKeys", func() {
+		It("orders ties by name so the result does not depend on map order", func() {
+			m := map[string]uint64{"delta": 5, "alpha": 5, "charlie": 5, "bravo": 5, "echo": 5}
+
+			first := getTopKeys(m, 3)
+			for i := 0; i < 50; i++ {
+				Expect(getTopKeys(m, 3)).To(Equal(first))
+			}
+			Expect(first).To(Equal([]string{"alpha", "bravo", "charlie"}))
+		})
+
+		It("still orders by count descending before falling back to the name", func() {
+			m := map[string]uint64{"zulu": 9, "alpha": 1, "mike": 5}
+
+			Expect(getTopKeys(m, 3)).To(Equal([]string{"zulu", "mike", "alpha"}))
+		})
+	})
+
+	Describe("buildVersionsChart", func() {
+		It("orders series the same way on every run when counts tie", func() {
+			day := func(n int, versions map[string]uint64) summary.SummaryRecord {
+				return summary.SummaryRecord{
+					Time: time.Date(2025, 1, n, 0, 0, 0, 0, time.UTC),
+					Data: summary.Summary{NumInstances: 100, Versions: versions},
+				}
+			}
+			tied := map[string]uint64{"1.0.0": 10, "1.0.1": 10, "1.0.2": 10, "1.0.3": 10}
+			summaries := []summary.SummaryRecord{day(1, tied), day(2, tied), day(3, tied)}
+
+			names := func() []string {
+				var out []string
+				for _, s := range buildVersionsChart(summaries).MultiSeries {
+					out = append(out, s.Name)
+				}
+				return out
+			}
+
+			first := names()
+			for i := 0; i < 30; i++ {
+				Expect(names()).To(Equal(first))
+			}
+		})
+	})
+
 })

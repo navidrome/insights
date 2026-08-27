@@ -96,9 +96,10 @@ func GetSummaries(dataFolder string) (iter.Seq[SummaryRecord], error) {
 // summaryPaths returns every summary file under baseDir with its date, sorted oldest first.
 //
 // The paths are collected up front, and only the paths: 555 of them is about 40 KB, against the
-// 28 MB of file contents that streaming keeps out of memory. Doing it this way makes the ordering
-// a promise the function keeps rather than one inherited from how WalkDir happens to sort
-// directories, which the bkp/ directory above already breaks.
+// 28 MB of file contents that streaming keeps out of memory. The explicit sort matters because
+// summaryPathRegex reads the date from the file name only and never checks it against the
+// surrounding YYYY/MM directory, so a file under a mismatched directory sorts wherever WalkDir's
+// lexical order puts that directory, not where its own date belongs.
 func summaryPaths(baseDir string) ([]time.Time, []string, error) {
 	type entry struct {
 		date time.Time

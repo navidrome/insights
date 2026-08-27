@@ -207,12 +207,14 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 	// Get top N versions by total count in the rolling window
 	topVersionsList := getTopKeys(versionTotals, consts.TopVersionsCount)
 
-	// Sort versions by last day's count (highest to lowest)
+	// Sort versions by last day's count (highest to lowest), breaking ties on the name so the
+	// series order does not depend on map iteration.
 	lastSummary := summaries[len(summaries)-1]
 	slices.SortFunc(topVersionsList, func(a, b string) int {
-		countA := lastSummary.Data.Versions[a]
-		countB := lastSummary.Data.Versions[b]
-		return cmp.Compare(countB, countA)
+		if c := cmp.Compare(lastSummary.Data.Versions[b], lastSummary.Data.Versions[a]); c != 0 {
+			return c
+		}
+		return cmp.Compare(a, b)
 	})
 
 	// Create a set of top versions for quick lookup
@@ -816,7 +818,10 @@ func getTopKeys(m map[string]uint64, n int) []string {
 		pairs = append(pairs, kv{k, v})
 	}
 	slices.SortFunc(pairs, func(a, b kv) int {
-		return cmp.Compare(b.Value, a.Value)
+		if c := cmp.Compare(b.Value, a.Value); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Key, b.Key)
 	})
 
 	if n > len(pairs) {

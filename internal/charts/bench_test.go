@@ -130,83 +130,86 @@ func benchmarkExport(b *testing.B, days int) {
 	}
 }
 
-// BenchmarkExportChartsJSON_* benchmarks measure cumulative allocation and sampled peak
-// heap during ExportChartsJSON. These are for informational comparison before/after
-// streaming optimization, NOT for gating. The gate is TestLoadChartInputRetainedHeap
-// which uses a deterministic bracketed-GC method to measure actual retained memory.
+// The two benchmarks below are the before-and-after story for a human to read, not the gate.
+// They report B/op (cumulative allocation, which the streaming rewrite made larger: three
+// discarding passes churn more bytes in total than one retaining pass) alongside peak-heap-B
+// (sampled, so it moves with wherever the collector happened to be when it looked). Neither
+// number is asserted on. TestLoadChartInputRetainedHeapPerDay is the only thing that fails on a
+// regression.
 func BenchmarkExportChartsJSON_500Days(b *testing.B)  { benchmarkExport(b, 500) }
 func BenchmarkExportChartsJSON_2000Days(b *testing.B) { benchmarkExport(b, 2000) }
 
-// TestLoadChartInputRetainedHeap measures that heap retained by loadChartInput
-// does not grow proportionally with summary history length.
+// retainedHeapBytesPerDay loads dir and returns the heap the loaded result keeps alive, divided
+// by the number of days it kept.
 //
-// Uses bracketed-GC method: GC before load, load, GC after, measure retained delta.
-// This measures deterministically what loadChartInput keeps on the heap after GC sweeps
-// away ephemeral allocations. Sampled peak heap was abandoned because it showed 64%
-// spread (3.49x to 5.73x) which made gate thresholds either too loose or too tight.
-//
-// Today's implementation retains a slim record per day in the Series slice, so heap
-// scales with history length. Measured today (20 runs): median 3.93x, range 3.89x to
-// 4.60x for 4x history (200 vs 800 days). Note: 71% spread remains; this is likely
-// inherent to loadChartInput's heap allocation pattern, not measurement noise.
-// After Task 5 (streaming implementation), ratio should be close to flat (~1.1x or less).
-// Threshold set to catch regressions without false positives from natural variance.
-func TestLoadChartInputRetainedHeap(t *testing.T) {
-	smallDir := t.TempDir()
-	largeDir := t.TempDir()
+// The load is bracketed by two collections: GC, read HeapAlloc, load, GC, read HeapAlloc, with
+// the result kept alive across the second reading. The second collection sweeps everything the
+// passes allocated and then dropped, so the difference is what the result retains rather than
+// what the load churned through. Cumulative allocation (B/op) cannot answer this question: it
+// counts the churn, and the churn went up when retention went down.
+func retainedHeapBytesPerDay(t *testing.T, dir string) float64 {
+	t.Helper()
 
-	// Light fixture: 300 player types per day.
-	// 200 and 800 days gives 4x day count.
-	writeSyntheticSummaries(t, smallDir, 200, 300)
-	writeSyntheticSummaries(t, largeDir, 800, 300)
-
-	// Measure retained heap for 200 days using bracketed-GC method
 	runtime.GC()
-	var beforeSmall runtime.MemStats
-	runtime.ReadMemStats(&beforeSmall)
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
 
-	smallInput, err := loadChartInput(smallDir)
+	in, err := loadChartInput(dir)
 	if err != nil {
-		t.Fatalf("loadChartInput (small): %v", err)
+		t.Fatalf("loadChartInput: %v", err)
 	}
 
 	runtime.GC()
-	var afterSmall runtime.MemStats
-	runtime.ReadMemStats(&afterSmall)
-	runtime.KeepAlive(smallInput) // Guarantee smallInput is still live at the reading above
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(in) // the second reading must see in as reachable, or it measures nothing
 
-	retainedSmall := afterSmall.HeapAlloc - beforeSmall.HeapAlloc
-
-	// Measure retained heap for 800 days using bracketed-GC method
-	runtime.GC()
-	var beforeLarge runtime.MemStats
-	runtime.ReadMemStats(&beforeLarge)
-
-	largeInput, err := loadChartInput(largeDir)
-	if err != nil {
-		t.Fatalf("loadChartInput (large): %v", err)
+	if len(in.Series) == 0 {
+		t.Fatal("loadChartInput returned no days: the measurement would be of a no-op")
 	}
+	if after.HeapAlloc <= before.HeapAlloc {
+		t.Fatalf("retained heap did not grow across the load: before %d B, after %d B",
+			before.HeapAlloc, after.HeapAlloc)
+	}
+	return float64(after.HeapAlloc-before.HeapAlloc) / float64(len(in.Series))
+}
 
-	runtime.GC()
-	var afterLarge runtime.MemStats
-	runtime.ReadMemStats(&afterLarge)
-	runtime.KeepAlive(largeInput) // Guarantee largeInput is still live at the reading above
+// retainedBudgetPerDay is what one day of history is allowed to cost, in bytes of live heap once
+// the chart input is loaded.
+//
+// A per-day figure, not a ratio between two history lengths. Retained heap is linear in the
+// number of days both before and after the streaming rewrite, because loadChartInput keeps one
+// record per day either way, so a 4x span gives a ratio near 4 whichever implementation is
+// running and the ratio distinguishes nothing. An earlier version of this test asserted exactly
+// that and was measuring the slope, which never changed. What changed is the constant: the old
+// code held the whole Summary for every day, the new code holds a daySeries. Over 564 real
+// production summaries that is 62.8 MB before against 1.00 MB after, or about 111 KB per day
+// against about 1.8 KB per day.
+//
+// Measured on the fixture below, 20 runs under -race plus 10 without: min 1260 B, max 1395 B,
+// median 1332 B per day, a 10% spread end to end. The budget is 8 KB, six times the worst
+// reading and still fourteen times under the 111 KB per day the old code cost, so it fails long
+// before a regression gets anywhere near reinstating per-day retention, and it is nowhere near
+// tight enough for measurement noise to reach. Deliberately loose: there are two orders of
+// magnitude between the two implementations and no reason to sit close to either edge.
+const retainedBudgetPerDay = 8 * 1024
 
-	retainedLarge := afterLarge.HeapAlloc - beforeLarge.HeapAlloc
+func TestLoadChartInputRetainedHeapPerDay(t *testing.T) {
+	// 600 days is close to the production history these numbers came from, and long enough that
+	// the fixed part of chartInput (the one full Latest summary, the version names) does not
+	// distort the per-day figure: comparing this size against 2400 days puts that fixed part at
+	// about 23 KB, so it contributes roughly 3% of the reading here. Longer only buys a slower
+	// test, and writing the fixture is most of the runtime.
+	const days = 600
+	dir := t.TempDir()
+	writeSyntheticSummaries(t, dir, days, 300)
 
-	ratio := float64(retainedLarge) / float64(retainedSmall)
+	perDay := retainedHeapBytesPerDay(t, dir)
+	t.Logf("retained heap: %.0f B per day over %d days, budget %d B", perDay, days, retainedBudgetPerDay)
 
-	// Threshold set to catch regressions. Measured today (20 runs):
-	// median 3.93x, range 3.89x to 4.60x for 4x history (200 vs 800 days).
-	// Set threshold to 5.1x (11% headroom above observed max) to tolerate
-	// variance while catching regressions like reintroducing half the per-day retention.
-	const threshold = 5.1
-	t.Logf("RATIO_MEASUREMENT: %.2f", ratio)
-	if ratio > threshold {
-		t.Logf("Retained heap ratio %.2f exceeds threshold %.2f (200 vs 800 days)", ratio, threshold)
-		t.Logf("  200 days:  %d bytes", retainedSmall)
-		t.Logf("  800 days:  %d bytes", retainedLarge)
-		t.Logf("After Task 5 optimization, ratio should be ~1.1x or less")
-		t.Fatalf("Memory retained by loadChartInput grows with history length (today: %.2f, expected after streaming: ~1.1x)", ratio)
+	if perDay > retainedBudgetPerDay {
+		t.Fatalf("loadChartInput retains %.0f B per day of history, over the %d B budget: "+
+			"the passes are meant to keep one slim record per day, so something is holding a "+
+			"per-day payload again", perDay, retainedBudgetPerDay)
 	}
 }

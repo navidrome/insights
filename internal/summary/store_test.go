@@ -217,5 +217,20 @@ var _ = Describe("SaveSummary", func() {
 
 			Expect(collect()).To(HaveLen(2))
 		})
+
+		It("returns an error when the summaries directory cannot be walked", func() {
+			write("2026/01/summary-2026-01-01.json", Summary{NumInstances: 1})
+
+			base := filepath.Join(dir, consts.SummariesDir)
+			Expect(os.Chmod(base, 0o000)).To(Succeed())
+			DeferCleanup(func() {
+				// Restore permissions before the suite's TempDir cleanup runs, or RemoveAll
+				// cannot read the directory to delete what is left inside it.
+				Expect(os.Chmod(base, consts.DirPermissions)).To(Succeed())
+			})
+
+			_, err := GetSummaries(dir)
+			Expect(err).To(HaveOccurred())
+		})
 	})
 })

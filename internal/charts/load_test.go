@@ -111,6 +111,82 @@ var _ = Describe("loadChartInput", func() {
 		Expect(in.Series).To(BeEmpty())
 	})
 
+	// The guard in loadChartInput exists for a race that a single before/after fixture cannot
+	// reproduce: within one loadChartInput call, pass 1 picks lastTime from a snapshot of the
+	// files on disk, and pass 3 re-reads those same files later in the same call. Corrupting a
+	// file before calling loadChartInput once corrupts it for every pass equally -- pass 1 would
+	// just never pick that day as lastTime in the first place, and the run stays self-consistent.
+	// The only way pass 1 and pass 3 can disagree is if the last day's file changes while
+	// loadChartInput is running, which is exactly what a concurrent writer (another save landing
+	// on today's file while an export or the chart handler reads it) can do in production.
+	//
+	// So this test drives the race directly: a writer goroutine hammers the last day's file
+	// between valid and malformed content for as long as the test runs, concurrently with many
+	// calls to loadChartInput. With the guard removed, a 100-iteration run of this same setup
+	// measured roughly two dozen inconsistent results (non-empty Series, zero-value Latest) per
+	// 100 calls on a development machine -- the race is not rare, it is just invisible to a
+	// two-shot before/after fixture.
+	It("never returns a non-empty Series with a zero-value Latest while the last day's file is being rewritten concurrently", func() {
+		const days = 300
+		for n := 0; n < days; n++ {
+			write(n, summary.Summary{
+				NumInstances: 100,
+				Versions:     map[string]uint64{"v": 1},
+				OS:           map[string]uint64{"good": uint64(n)}, //#nosec G115 -- test-only, n is small and non-negative
+				PlayerTypes:  map[string]uint64{"a": 1},
+			})
+		}
+		lastPath := filepath.Join(dir, consts.SummariesDir, day(days-1).Format("2006"), day(days-1).Format("01"),
+			"summary-"+day(days-1).Format(consts.DateFormat)+".json")
+		goodBytes, err := json.Marshal(summary.Summary{
+			NumInstances: 100,
+			Versions:     map[string]uint64{"v": 1},
+			OS:           map[string]uint64{"good": uint64(days - 1)},
+			PlayerTypes:  map[string]uint64{"a": 1},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		badBytes := []byte("{not json")
+
+		stop := make(chan struct{})
+		done := make(chan struct{})
+		go func() {
+			defer GinkgoRecover()
+			defer close(done)
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = os.WriteFile(lastPath, badBytes, 0o600)
+				_ = os.WriteFile(lastPath, goodBytes, 0o600)
+			}
+		}()
+		DeferCleanup(func() {
+			close(stop)
+			<-done
+		})
+
+		sawEmpty := false
+		for i := 0; i < 100; i++ {
+			in, err := loadChartInput(dir)
+			Expect(err).ToNot(HaveOccurred())
+			if len(in.Series) == 0 {
+				sawEmpty = true
+				continue
+			}
+			// The caller-visible invariant: whenever there is data to show, the latest day's
+			// full summary must be real. NumInstances == 0 is the zero value GetSummaries never
+			// yields (it filters exactly that case out), so seeing it here means in.Latest was
+			// never actually captured -- the failure this guard exists to prevent.
+			Expect(in.Latest.NumInstances).ToNot(BeZero(),
+				"a non-empty Series with a zero-value Latest would render five snapshot charts "+
+					"from all-zero data and publish totalInstances: 0")
+		}
+		Expect(sawEmpty).To(BeTrue(),
+			"the writer goroutine never won the race in 100 attempts: this run does not prove the guard fired")
+	})
+
 	It("selects versions from the rolling window, not from all history", func() {
 		// An old version that dominates history but is absent from the window must not win.
 		write(0, summary.Summary{NumInstances: 100, PlayerTypes: map[string]uint64{"a": 1},

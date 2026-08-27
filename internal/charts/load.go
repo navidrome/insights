@@ -1,6 +1,7 @@
 package charts
 
 import (
+	"log"
 	"time"
 
 	"github.com/navidrome/insights/internal/consts"
@@ -81,6 +82,7 @@ func loadChartInput(dataFolder string) (chartInput, error) {
 	// Pass 3: the slim record per day, plus the one full summary.
 	in := chartInput{TopVersions: top, LatestTime: lastTime}
 	in.Series = make([]daySeries, 0, len(scan))
+	sawLatest := false
 	for r := range seq {
 		if r.Time.After(lastTime) {
 			break
@@ -107,7 +109,27 @@ func loadChartInput(dataFolder string) (chartInput, error) {
 		in.Series = append(in.Series, d)
 		if r.Time.Equal(lastTime) {
 			in.Latest = r.Data
+			sawLatest = true
 		}
+	}
+	if !sawLatest {
+		// lastTime came from pass 1's read of these same files. If the file for that one day
+		// becomes unreadable, malformed, or reports zero instances by the time pass 3 re-reads
+		// it, GetSummaries silently skips it (it logs and continues; see store.go), so the
+		// r.Time.Equal(lastTime) branch above never runs and in.Latest stays the zero-value
+		// Summary while in.Series is still non-empty (every earlier day loaded fine). The five
+		// snapshot charts read in.Latest, and the len(in.Series) == 0 guard both callers use to
+		// detect "no data" would not catch this, so the charts would render from an all-zero
+		// summary and charts.json would publish "totalInstances": 0.
+		//
+		// Folding this into the same "no data" contract, rather than adding a second error path
+		// callers would need to learn, is deliberate: both callers already handle an empty
+		// chartInput correctly (ChartsHandler answers 404, ExportChartsJSON skips the write and
+		// logs), and the condition is expected to self-heal on the next run once the file
+		// finishes writing or tomorrow's day arrives, so it is not treated as fatal.
+		log.Printf("Warning: latest day %s vanished between passes, treating as no data",
+			lastTime.Format(consts.DateFormat))
+		return chartInput{}, nil
 	}
 	return in, nil
 }

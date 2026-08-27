@@ -44,19 +44,9 @@ var _ = Describe("SummarizeData", func() {
 		writeReportsOn(day, ids...)
 	}
 
-	// getSummaries materialises GetSummaries's sequence, which is what the assertions below
-	// still index and count.
 	getSummaries := func() ([]SummaryRecord, error) {
 		GinkgoHelper()
-		seq, err := GetSummaries(dir)
-		if err != nil {
-			return nil, err
-		}
-		var out []SummaryRecord
-		for r := range seq {
-			out = append(out, r)
-		}
-		return out, nil
+		return collectSummaries(dir), nil
 	}
 
 	It("writes no summary file when the day has no report file", func() {

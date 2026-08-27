@@ -716,33 +716,6 @@ func buildAlbumsArtistsChart(latest summary.Summary) *charts.Bar {
 	return bar
 }
 
-// getTopKeys returns the top N keys from a map sorted by value descending
-func getTopKeys(m map[string]uint64, n int) []string {
-	type kv struct {
-		Key   string
-		Value uint64
-	}
-	var pairs []kv
-	for k, v := range m {
-		pairs = append(pairs, kv{k, v})
-	}
-	slices.SortFunc(pairs, func(a, b kv) int {
-		if c := cmp.Compare(b.Value, a.Value); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.Key, b.Key)
-	})
-
-	if n > len(pairs) {
-		n = len(pairs)
-	}
-	result := make([]string, n)
-	for i := 0; i < n; i++ {
-		result[i] = pairs[i].Key
-	}
-	return result
-}
-
 // ExportChartsJSON writes charts.json under dataFolder. The output directory is derived here
 // rather than passed in, so every caller lands in the same place.
 func ExportChartsJSON(dataFolder string) error {
@@ -830,17 +803,5 @@ func sortPieDataByValue(data []opts.PieData) {
 			return c
 		}
 		return cmp.Compare(a.Name, b.Name)
-	})
-}
-
-// sortVersionsByLastDay orders the selected versions by their count on the last day, breaking
-// ties on the name. The tiebreak is what makes it a total order: counts come out of a map, so
-// without it two versions on equal counts swap between runs and charts.json churns.
-func sortVersionsByLastDay(versions []string, lastDay map[string]uint64) {
-	slices.SortFunc(versions, func(a, b string) int {
-		if c := cmp.Compare(lastDay[b], lastDay[a]); c != 0 {
-			return c
-		}
-		return cmp.Compare(a, b)
 	})
 }

@@ -19,15 +19,11 @@ var _ = Describe("loadChartInput", func() {
 
 	day := func(n int) time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, n) }
 
+	// Writing through SaveSummary rather than a local writer keeps these fixtures on the same
+	// path production uses, so a change to the on-disk format cannot pass here and fail there.
 	write := func(n int, s summary.Summary) {
 		GinkgoHelper()
-		t := day(n)
-		p := filepath.Join(dir, consts.SummariesDir, t.Format("2006"), t.Format("01"),
-			"summary-"+t.Format(consts.DateFormat)+".json")
-		Expect(os.MkdirAll(filepath.Dir(p), 0o750)).To(Succeed())
-		b, err := json.Marshal(s)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(os.WriteFile(p, b, 0o600)).To(Succeed())
+		Expect(summary.SaveSummary(dir, s, day(n))).To(Succeed())
 	}
 
 	It("keeps only the selected versions on each day", func() {
@@ -158,8 +154,10 @@ var _ = Describe("loadChartInput", func() {
 					return
 				default:
 				}
-				_ = os.WriteFile(lastPath, badBytes, 0o600)
-				_ = os.WriteFile(lastPath, goodBytes, 0o600)
+				// Deliberately not SaveSummary: its atomic rename can never expose a torn file,
+				// and a torn file is exactly what this test needs pass 3 to trip over.
+				_ = os.WriteFile(lastPath, badBytes, consts.FilePermissions)
+				_ = os.WriteFile(lastPath, goodBytes, consts.FilePermissions)
 			}
 		}()
 		DeferCleanup(func() {

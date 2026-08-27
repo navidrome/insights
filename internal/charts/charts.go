@@ -207,15 +207,8 @@ func buildVersionsChart(summaries []summary.SummaryRecord) *charts.Line {
 	// Get top N versions by total count in the rolling window
 	topVersionsList := getTopKeys(versionTotals, consts.TopVersionsCount)
 
-	// Sort versions by last day's count (highest to lowest), breaking ties on the name so the
-	// series order does not depend on map iteration.
 	lastSummary := summaries[len(summaries)-1]
-	slices.SortFunc(topVersionsList, func(a, b string) int {
-		if c := cmp.Compare(lastSummary.Data.Versions[b], lastSummary.Data.Versions[a]); c != 0 {
-			return c
-		}
-		return cmp.Compare(a, b)
-	})
+	sortVersionsByLastDay(topVersionsList, lastSummary.Data.Versions)
 
 	// Create a set of top versions for quick lookup
 	topVersionsSet := make(map[string]bool)
@@ -926,6 +919,18 @@ func sortPieDataByValue(data []opts.PieData) {
 			return c
 		}
 		return cmp.Compare(a.Name, b.Name)
+	})
+}
+
+// sortVersionsByLastDay orders the selected versions by their count on the last day, breaking
+// ties on the name. The tiebreak is what makes it a total order: counts come out of a map, so
+// without it two versions on equal counts swap between runs and charts.json churns.
+func sortVersionsByLastDay(versions []string, lastDay map[string]uint64) {
+	slices.SortFunc(versions, func(a, b string) int {
+		if c := cmp.Compare(lastDay[b], lastDay[a]); c != 0 {
+			return c
+		}
+		return cmp.Compare(a, b)
 	})
 }
 

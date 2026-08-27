@@ -2,6 +2,7 @@ package charts
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -201,10 +202,17 @@ var _ = Describe("Charts", func() {
 		})
 
 		It("returns pie chart with data from latest summary", func() {
+			// PlayerTypes is left unset: a builder that reads the wrong field off latest
+			// (e.g. PlayerTypes instead of OS) would produce a pie with no slices at all,
+			// which these value checks catch and a bare NotTo(BeNil()) would not.
 			latest := summary.Summary{OS: map[string]uint64{"Linux - amd64": 20, "macOS - arm64": 5}}
 
 			chart := buildOSChart(latest)
 			Expect(chart).NotTo(BeNil())
+
+			data := chart.MultiSeries[0].Data.([]opts.PieData)
+			Expect(data).To(ContainElement(opts.PieData{Name: "Linux - amd64", Value: uint64(20)}))
+			Expect(data).To(ContainElement(opts.PieData{Name: "macOS - arm64", Value: uint64(5)}))
 		})
 	})
 
@@ -235,6 +243,11 @@ var _ = Describe("Charts", func() {
 
 			chart := buildPlayerTypesChart(latest)
 			Expect(chart).NotTo(BeNil())
+
+			data := chart.MultiSeries[0].Data.([]opts.PieData)
+			Expect(data).To(ContainElement(opts.PieData{Name: "NavidromeUI", Value: uint64(20)}))
+			Expect(data).To(ContainElement(opts.PieData{Name: "Supersonic", Value: uint64(15)}))
+			Expect(data).To(ContainElement(opts.PieData{Name: "Audioling", Value: uint64(5)}))
 		})
 
 		It("groups players with less than 0.2% into Others", func() {
@@ -293,6 +306,11 @@ var _ = Describe("Charts", func() {
 
 			chart := buildPlayersChart(series)
 			Expect(chart).NotTo(BeNil())
+
+			data := chart.MultiSeries[0].Data.([]opts.LineData)
+			Expect(data).To(HaveLen(2))
+			Expect(data[0].Value).To(Equal(uint64(15)))
+			Expect(data[1].Value).To(Equal(uint64(35)))
 		})
 
 		It("handles a day with no players", func() {
@@ -311,6 +329,14 @@ var _ = Describe("Charts", func() {
 
 			chart := buildPlayersPerInstallationChart(latest)
 			Expect(chart).NotTo(BeNil())
+
+			// Bins are in the fixed order declared in the builder: "0","1","2","3",...
+			data := chart.MultiSeries[0].Data.([]opts.BarData)
+			Expect(data[0].Value).To(Equal(uint64(100)))
+			Expect(data[1].Value).To(Equal(uint64(500)))
+			Expect(data[2].Value).To(Equal(uint64(200)))
+			Expect(data[3].Value).To(Equal(uint64(50)))
+			Expect(data[4].Value).To(Equal(uint64(0)))
 		})
 
 		It("handles empty players data", func() {
@@ -327,6 +353,15 @@ var _ = Describe("Charts", func() {
 
 			chart := buildTracksChart(latest)
 			Expect(chart).NotTo(BeNil())
+
+			// trackBinLabels order: "0", "1-500", "501-1,000", "1,001-5,000", "5,001-10,000",
+			// "10,001-20,000", "20,001-50,000", "50,001-100,000", ...
+			data := chart.MultiSeries[0].Data.([]opts.BarData)
+			Expect(data[0].Value).To(Equal(uint64(50)), "bin \"0\"")
+			Expect(data[3].Value).To(Equal(uint64(200)), "bin \"1,001-5,000\"")
+			Expect(data[5].Value).To(Equal(uint64(150)), "bin \"10,001-20,000\"")
+			Expect(data[7].Value).To(Equal(uint64(80)), "bin \"50,001-100,000\"")
+			Expect(data[1].Value).To(Equal(uint64(0)))
 		})
 
 		It("handles empty tracks data", func() {
@@ -346,6 +381,20 @@ var _ = Describe("Charts", func() {
 
 			chart := buildAlbumsArtistsChart(latest)
 			Expect(chart).NotTo(BeNil())
+
+			// albumArtistBinLabels order: "0", "1-10", "11-50", "51-100", "101-500",
+			// "501-1,000", "1,001-2,000", "2,001-5,000", ...
+			albums := chart.MultiSeries[0].Data.([]opts.BarData)
+			Expect(albums[0].Value).To(Equal(uint64(50)), "albums bin \"0\"")
+			Expect(albums[4].Value).To(Equal(uint64(200)), "albums bin \"101-500\"")
+			Expect(albums[6].Value).To(Equal(uint64(150)), "albums bin \"1,001-2,000\"")
+			Expect(albums[8].Value).To(Equal(uint64(80)), "albums bin \"5,001-10,000\"")
+
+			artists := chart.MultiSeries[1].Data.([]opts.BarData)
+			Expect(artists[0].Value).To(Equal(uint64(40)), "artists bin \"0\"")
+			Expect(artists[4].Value).To(Equal(uint64(180)), "artists bin \"101-500\"")
+			Expect(artists[6].Value).To(Equal(uint64(120)), "artists bin \"1,001-2,000\"")
+			Expect(artists[8].Value).To(Equal(uint64(60)), "artists bin \"5,001-10,000\"")
 		})
 
 		It("handles empty albums and artists data", func() {
@@ -390,24 +439,67 @@ var _ = Describe("Charts", func() {
 	// "drops versions outside the top N" in load_test.go). buildVersionsChart only receives
 	// the already-selected list, so what is left to test here is that it buckets whatever
 	// falls outside that list into "Others" rather than dropping it or giving it a series.
-	Describe("buildVersionsChart others bucket", func() {
-		It("sums versions outside top into Others, not as an individual series", func() {
-			series := []daySeries{{
-				Time:         time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
-				NumInstances: 100,
-				Versions:     map[string]uint64{"v1": 90, "v2": 10},
-			}}
-			top := []string{"v1"}
+	Describe("buildVersionsChart All and Others series", func() {
+		It("counts the whole day, not just the top-N slice, going through loadChartInput", func() {
+			// A hand-built daySeries{Versions: {"v1":90,"v2":10}} with top ["v1"] is a shape
+			// loadChartInput can never produce: pass 3 always derives Versions as a subset of
+			// top, so d.Versions never holds a version outside it. The bug this guards against
+			// (All silently summing only the top-N slice, Others always reading zero) only
+			// shows up once the real filtering in loadChartInput's pass 3 is exercised, so the
+			// fixture here goes through loadChartInput rather than constructing daySeries by
+			// hand.
+			baseDate := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
-			chart := buildVersionsChart(series, top)
+			// Day 0 sits outside the VersionSelectionDays rolling window, so its only version
+			// ("ancient") is never even a candidate for the top set - not because it loses on
+			// count, but because pass 2 never counts it at all. Before the fix, filtering
+			// Versions down to the top-N first and summing that emptied map made AllVersions
+			// read 0 for this day, inventing a rise from nothing on the public chart.
+			// NumInstances matches the recent day's: a big swing here would trip
+			// trimIncomplete's cliff detection on the two-entry scan and drop the recent day
+			// as an incomplete tail, which is a different behavior than the one under test.
+			Expect(summary.SaveSummary(tempDir, summary.Summary{
+				NumInstances: 100,
+				Versions:     map[string]uint64{"ancient": 1000},
+			}, baseDate)).To(Succeed())
+
+			// The recent day has consts.TopVersionsCount+1 distinct versions so exactly one -
+			// "tail", the lowest count - loses the top-N cut on merit, inside the window.
+			recentVersions := map[string]uint64{"tail": 1}
+			for i := 0; i < consts.TopVersionsCount; i++ {
+				recentVersions[fmt.Sprintf("filler-%d", i)] = uint64(100 - i)
+			}
+			var wantAllRecent uint64
+			for _, c := range recentVersions {
+				wantAllRecent += c
+			}
+			recent := baseDate.AddDate(0, 0, consts.VersionSelectionDays+10)
+			Expect(summary.SaveSummary(tempDir, summary.Summary{
+				NumInstances: 100,
+				Versions:     recentVersions,
+			}, recent)).To(Succeed())
+
+			in, err := loadChartInput(tempDir)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(in.TopVersions).NotTo(ContainElement("tail"), "the lowest count of 16 distinct versions loses the top-15 cut")
+			Expect(in.TopVersions).NotTo(ContainElement("ancient"), "day 0 is outside the rolling window entirely")
+
+			chart := buildVersionsChart(in.Series, in.TopVersions)
 			Expect(chart).NotTo(BeNil())
 
-			jsonBytes, err := json.Marshal(chart.JSON())
-			Expect(err).NotTo(HaveOccurred())
-			jsonStr := string(jsonBytes)
+			// "All" is always added first and "Others" always last, regardless of how many
+			// top-N series land in between.
+			allData := chart.MultiSeries[0].Data.([]opts.LineData)
+			othersData := chart.MultiSeries[len(chart.MultiSeries)-1].Data.([]opts.LineData)
 
-			Expect(jsonStr).To(ContainSubstring("v1"))
-			Expect(jsonStr).NotTo(ContainSubstring("v2"))
+			Expect(allData[0].Value).To(Equal(uint64(1000)),
+				"day 0's version never reaches the top set, but its count must still show in All")
+			Expect(othersData[0].Value).To(Equal(uint64(1000)),
+				"none of day 0's versions are in the top set, so all of it goes to Others")
+
+			last := len(allData) - 1
+			Expect(allData[last].Value).To(Equal(wantAllRecent), "all 16 versions, not just the top 15")
+			Expect(othersData[last].Value).To(Equal(uint64(1)), "only \"tail\" misses the top-N cut")
 		})
 	})
 

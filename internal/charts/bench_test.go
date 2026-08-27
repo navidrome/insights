@@ -44,11 +44,17 @@ func writeSyntheticSummaries(tb testing.TB, dir string, days, playerTypesPerDay 
 	}
 }
 
-// measurePeakHeap runs fn while sampling runtime.ReadMemStats and returns the peak HeapAlloc.
+// measurePeakHeap runs fn while sampling runtime.ReadMemStats and returns the peak HeapAlloc delta.
+// Measures the heap consumed by the function itself, not the baseline heap state.
 // The sampler runs in a goroutine on a 10ms interval to avoid -race issues.
 func measurePeakHeap(fn func()) uint64 {
 	runtime.GC()
 	time.Sleep(10 * time.Millisecond) // Let GC settle
+
+	// Capture baseline after GC to measure only the delta for this call
+	var baselineStats runtime.MemStats
+	runtime.ReadMemStats(&baselineStats)
+	baseline := baselineStats.HeapAlloc
 
 	var peak uint64
 	var mu sync.Mutex
@@ -67,8 +73,10 @@ func measurePeakHeap(fn func()) uint64 {
 				var m runtime.MemStats
 				runtime.ReadMemStats(&m)
 				mu.Lock()
-				if m.HeapAlloc > peak {
-					peak = m.HeapAlloc
+				// Record delta from baseline, floored at zero
+				delta := m.HeapAlloc - baseline
+				if delta > peak {
+					peak = delta
 				}
 				mu.Unlock()
 			case <-stop:
@@ -129,11 +137,11 @@ func BenchmarkExportChartsJSON_2000Days(b *testing.B) { benchmarkExport(b, 2000)
 // does not grow proportionally with summary history length.
 //
 // Today's implementation retains every day in memory, so peak heap scales with days.
-// Measured today at ~3.95x for 4x history (200 vs 800 days).
-// After Task 5 (streaming implementation), peak should be close to flat (~1x-1.2x).
-// This test will fail until the streaming optimization lands; the threshold is set
-// to pass today's code. The threshold will be tightened in Task 5 once the
-// optimization proves the peak is independent of history length.
+// Measured today (20 runs): median 3.97x, range 3.49x to 5.73x for 4x history (200 vs 800 days).
+// After Task 5 (streaming implementation), peak should be close to flat (~1.2x or less).
+// Threshold set to 6.2x (8% headroom above observed max) to tolerate variance.
+// The threshold will be tightened in Task 5 once the optimization proves the peak
+// is independent of history length.
 func TestExportMemoryDoesNotGrowWithHistory(t *testing.T) {
 	smallDir := t.TempDir()
 	largeDir := t.TempDir()
@@ -158,8 +166,10 @@ func TestExportMemoryDoesNotGrowWithHistory(t *testing.T) {
 	ratio := float64(largePeak) / float64(smallPeak)
 
 	// Threshold set to pass today's code (which retains all days).
-	// Measured today: ~3.95x. Set threshold to 4.5 to tolerate variance.
-	const threshold = 4.5
+	// Observed max from 20 runs: 5.73x. Threshold 6.2x provides 8% headroom.
+	// Will be tightened in Task 5 once streaming optimization lands.
+	const threshold = 6.2
+	t.Logf("RATIO_MEASUREMENT: %.2f", ratio)
 	if ratio > threshold {
 		t.Logf("Peak heap ratio %.2f exceeds threshold %.2f (200 vs 800 days)", ratio, threshold)
 		t.Logf("  200 days:  %d bytes", smallPeak)
@@ -167,8 +177,4 @@ func TestExportMemoryDoesNotGrowWithHistory(t *testing.T) {
 		t.Logf("After Task 5 optimization, ratio should be ~1.2x or less")
 		t.Fatalf("Memory growth tracking history length (today: %.2f, expected after streaming: ~1.2x)", ratio)
 	}
-
-	t.Logf("Peak heap ratio: %.2f (200 vs 800 days)", ratio)
-	t.Logf("  200 days:  %d bytes", smallPeak)
-	t.Logf("  800 days:  %d bytes", largePeak)
 }

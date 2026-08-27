@@ -44,6 +44,21 @@ var _ = Describe("SummarizeData", func() {
 		writeReportsOn(day, ids...)
 	}
 
+	// getSummaries materialises GetSummaries's sequence, which is what the assertions below
+	// still index and count.
+	getSummaries := func() ([]SummaryRecord, error) {
+		GinkgoHelper()
+		seq, err := GetSummaries(dir)
+		if err != nil {
+			return nil, err
+		}
+		var out []SummaryRecord
+		for r := range seq {
+			out = append(out, r)
+		}
+		return out, nil
+	}
+
 	It("writes no summary file when the day has no report file", func() {
 		Expect(SummarizeData(dir, day)).To(Succeed())
 
@@ -57,7 +72,7 @@ var _ = Describe("SummarizeData", func() {
 
 		Expect(SummarizeData(dir, day)).To(Succeed())
 
-		summaries, err := GetSummaries(dir)
+		summaries, err := getSummaries()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(summaries).To(HaveLen(1))
 		Expect(summaries[0].Data.NumInstances).To(Equal(int64(42)))
@@ -68,7 +83,7 @@ var _ = Describe("SummarizeData", func() {
 
 		Expect(SummarizeData(dir, day)).To(Succeed())
 
-		summaries, err := GetSummaries(dir)
+		summaries, err := getSummaries()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(summaries).To(HaveLen(1))
 		Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)))
@@ -80,7 +95,7 @@ var _ = Describe("SummarizeData", func() {
 
 		Expect(SummarizeData(dir, day)).To(Succeed())
 
-		summaries, err := GetSummaries(dir)
+		summaries, err := getSummaries()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(summaries[0].Data.NumInstances).To(Equal(int64(2)))
 	})
@@ -111,7 +126,7 @@ var _ = Describe("SummarizeData", func() {
 			writeReports("c") // a second writer session, so the day has two segments
 			Expect(SummarizeData(dir, day)).To(Succeed())
 
-			summaries, err := GetSummaries(dir)
+			summaries, err := getSummaries()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)))
 
@@ -123,7 +138,7 @@ var _ = Describe("SummarizeData", func() {
 
 			Expect(SummarizeData(dir, day)).To(Succeed())
 
-			summaries, err = GetSummaries(dir)
+			summaries, err = getSummaries()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries).To(HaveLen(1))
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)),
@@ -137,7 +152,7 @@ var _ = Describe("SummarizeData", func() {
 			writeReports("c") // a second writer session, so the day has two segments
 			Expect(SummarizeData(dir, day)).To(Succeed())
 
-			summaries, err := GetSummaries(dir)
+			summaries, err := getSummaries()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)))
 
@@ -147,7 +162,7 @@ var _ = Describe("SummarizeData", func() {
 
 			Expect(SummarizeData(dir, day)).ToNot(Succeed(), "-once has to see this fail")
 
-			summaries, err = GetSummaries(dir)
+			summaries, err = getSummaries()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries).To(HaveLen(1))
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)),
@@ -163,7 +178,7 @@ var _ = Describe("SummarizeData", func() {
 			writeReports("c") // a second writer session, so the day has two segments
 			Expect(SummarizeData(dir, day)).To(Succeed())
 
-			summaries, err := GetSummaries(dir)
+			summaries, err := getSummaries()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)))
 
@@ -189,7 +204,7 @@ var _ = Describe("SummarizeData", func() {
 
 			Expect(SummarizeData(dir, day)).To(Succeed())
 
-			summaries, err = GetSummaries(dir)
+			summaries, err = getSummaries()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)),
 				"the read covered one segment while the check saw both")
@@ -237,7 +252,7 @@ var _ = Describe("SummarizeData", func() {
 			writeReports("c") // a second writer session, so the day has two segments
 			Expect(SummarizeData(dir, day)).To(Succeed())
 
-			summaries, err := GetSummaries(dir)
+			summaries, err := getSummaries()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)))
 
@@ -249,7 +264,7 @@ var _ = Describe("SummarizeData", func() {
 
 			Expect(SummarizeData(dir, day)).To(Succeed(), "an unfinished purge is not a failure")
 
-			summaries, err = GetSummaries(dir)
+			summaries, err = getSummaries()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries).To(HaveLen(1))
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)),
@@ -290,7 +305,7 @@ var _ = Describe("SummarizeData", func() {
 
 			Expect(SummarizeData(dir, today)).To(Succeed())
 
-			summaries, err := GetSummaries(dir)
+			summaries, err := getSummaries()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries).To(HaveLen(1))
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(1)), "the snapshot held one segment")
@@ -304,7 +319,7 @@ var _ = Describe("SummarizeData", func() {
 			writeReports("c") // a second writer session, so the day has two segments
 			Expect(SummarizeData(dir, day)).To(Succeed())
 
-			summaries, err := GetSummaries(dir)
+			summaries, err := getSummaries()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)))
 
@@ -321,7 +336,7 @@ var _ = Describe("SummarizeData", func() {
 
 			Expect(SummarizeData(dir, day)).To(Succeed())
 
-			summaries, err = GetSummaries(dir)
+			summaries, err = getSummaries()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(summaries).To(HaveLen(1))
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(3)),

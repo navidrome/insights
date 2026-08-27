@@ -167,9 +167,9 @@ var _ = Describe("Charts", func() {
 		})
 	})
 
-	Describe("GetSummaries", func() {
+	Describe("collectSummaries", func() {
 		It("returns empty slice when no summaries exist", func() {
-			summaries, err := summary.GetSummaries(tempDir)
+			summaries, err := collectSummaries(tempDir)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(summaries).To(BeEmpty())
 		})
@@ -184,7 +184,7 @@ var _ = Describe("Charts", func() {
 			err = summary.SaveSummary(tempDir, summary2, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
 
-			summaries, err := summary.GetSummaries(tempDir)
+			summaries, err := collectSummaries(tempDir)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(summaries).To(HaveLen(2))
 			Expect(summaries[0].Time.Day()).To(Equal(1))
@@ -205,7 +205,7 @@ var _ = Describe("Charts", func() {
 			err = summary.SaveSummary(tempDir, summary3, time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
 
-			summaries, err := summary.GetSummaries(tempDir)
+			summaries, err := collectSummaries(tempDir)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(summaries).To(HaveLen(2))
 			Expect(summaries[0].Data.NumInstances).To(Equal(int64(100)))

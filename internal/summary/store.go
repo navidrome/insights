@@ -3,6 +3,7 @@ package summary
 import (
 	"encoding/json"
 	"io/fs"
+	"iter"
 	"log"
 	"os"
 	"path/filepath"
@@ -49,71 +50,103 @@ func SaveSummary(dataFolder string, summary Summary, t time.Time) error {
 	return fsutil.WriteFileAtomic(filePath, data, consts.FilePermissions)
 }
 
-// summaryFileRegex matches files like "summary-2025-11-29.json"
-var summaryFileRegex = regexp.MustCompile(`^summary-(\d{4}-\d{2}-\d{2})\.json$`)
+// summaryPathRegex matches the layout SummaryFilePath writes, relative to the summaries
+// directory. Matching the whole relative path rather than just the file name keeps a copy nested
+// deeper out of the charts: production grew a summaries/2026/04/bkp/ directory of hand-made
+// backups, and a name-only match loaded each of those days twice.
+var summaryPathRegex = regexp.MustCompile(`^\d{4}/\d{2}/summary-(\d{4}-\d{2}-\d{2})\.json$`)
 
-func GetSummaries(dataFolder string) ([]SummaryRecord, error) {
+// GetSummaries yields one day at a time, oldest first. Ranging over the returned sequence again
+// re-reads the files, which is what lets a caller make several passes without ever holding more
+// than one day. Only the day being yielded is alive; what to keep is the caller's decision.
+//
+// Per-file damage is logged and skipped, so one unreadable day does not cost the whole export.
+func GetSummaries(dataFolder string) (iter.Seq[SummaryRecord], error) {
 	baseDir := filepath.Join(dataFolder, consts.SummariesDir)
 
-	var summaries []SummaryRecord
+	dates, paths, err := summaryPaths(baseDir)
+	if err != nil {
+		return nil, err
+	}
 
-	err := filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error { //#nosec G703 -- baseDir is from controlled env var and constant
+	seq := func(yield func(SummaryRecord) bool) {
+		for i, p := range paths {
+			data, err := os.ReadFile(p) //#nosec G304 -- p comes from a walk of a controlled directory
+			if err != nil {
+				log.Printf("Warning: skipping unreadable file %s: %v", p, err)
+				continue
+			}
+			var s Summary
+			if err := json.Unmarshal(data, &s); err != nil {
+				log.Printf("Warning: skipping malformed file %s: %v", p, err)
+				continue
+			}
+			// Skip empty summaries
+			if s.NumInstances == 0 {
+				continue
+			}
+			if !yield(SummaryRecord{Time: dates[i], Data: s}) {
+				return
+			}
+		}
+	}
+	return seq, nil
+}
+
+// summaryPaths returns every summary file under baseDir with its date, sorted oldest first.
+//
+// The paths are collected up front, and only the paths: 555 of them is about 40 KB, against the
+// 28 MB of file contents that streaming keeps out of memory. Doing it this way makes the ordering
+// a promise the function keeps rather than one inherited from how WalkDir happens to sort
+// directories, which the bkp/ directory above already breaks.
+func summaryPaths(baseDir string) ([]time.Time, []string, error) {
+	type entry struct {
+		date time.Time
+		path string
+	}
+	var entries []entry
+
+	err := filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error { //#nosec G703 -- baseDir is from a controlled env var and constant
 		if err != nil {
-			// Skip inaccessible directories/files
+			// A missing summaries directory is a service that has not summarized yet, not damage.
 			if os.IsNotExist(err) {
 				return nil
 			}
 			return err
 		}
-
 		if d.IsDir() {
 			return nil
 		}
-
-		// Check if filename matches expected pattern
-		matches := summaryFileRegex.FindStringSubmatch(d.Name())
+		rel, err := filepath.Rel(baseDir, path)
+		if err != nil {
+			// WalkDir only ever hands back paths under baseDir, so this is unreachable in
+			// practice; skip rather than abort the walk over one file.
+			log.Printf("Warning: skipping file outside base directory %s: %v", path, err)
+			return nil
+		}
+		matches := summaryPathRegex.FindStringSubmatch(filepath.ToSlash(rel))
 		if matches == nil {
 			return nil
 		}
-
-		// Parse date from filename
-		dateStr := matches[1]
-		t, err := time.Parse(consts.DateFormat, dateStr)
+		t, err := time.Parse(consts.DateFormat, matches[1])
 		if err != nil {
 			log.Printf("Warning: skipping file with invalid date %s: %v", path, err)
 			return nil
 		}
-
-		// Read and parse file
-		data, err := os.ReadFile(path) //#nosec G304,G122 -- path is from controlled directory walk
-		if err != nil {
-			log.Printf("Warning: skipping unreadable file %s: %v", path, err)
-			return nil
-		}
-
-		var summary Summary
-		if err := json.Unmarshal(data, &summary); err != nil {
-			log.Printf("Warning: skipping malformed file %s: %v", path, err)
-			return nil
-		}
-
-		// Skip empty summaries
-		if summary.NumInstances == 0 {
-			return nil
-		}
-
-		summaries = append(summaries, SummaryRecord{Time: t, Data: summary})
+		entries = append(entries, entry{date: t, path: path})
 		return nil
 	})
-
 	if err != nil && !os.IsNotExist(err) {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// Sort by date ascending
-	slices.SortFunc(summaries, func(a, b SummaryRecord) int {
-		return a.Time.Compare(b.Time)
-	})
+	slices.SortFunc(entries, func(a, b entry) int { return a.date.Compare(b.date) })
 
-	return summaries, nil
+	dates := make([]time.Time, len(entries))
+	paths := make([]string, len(entries))
+	for i, e := range entries {
+		dates[i] = e.date
+		paths[i] = e.path
+	}
+	return dates, paths, nil
 }

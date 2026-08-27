@@ -155,7 +155,7 @@ func buildMarkAreaData(gaps []gapRange) [][]opts.MarkAreaData {
 
 func ChartsHandler(dataFolder string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		summaries, err := summary.GetSummaries(dataFolder)
+		summaries, err := collectSummaries(dataFolder)
 		if err != nil {
 			log.Printf("Error loading summaries: %v", err)
 			http.Error(w, "Failed to load data", http.StatusInternalServerError)
@@ -838,7 +838,7 @@ func getTopKeys(m map[string]uint64, n int) []string {
 // rather than passed in, so every caller lands in the same place.
 func ExportChartsJSON(dataFolder string) error {
 	outputDir := filepath.Join(dataFolder, consts.ChartDataDir)
-	summaries, err := summary.GetSummaries(dataFolder)
+	summaries, err := collectSummaries(dataFolder)
 	if err != nil {
 		return err
 	}
@@ -927,4 +927,18 @@ func sortPieDataByValue(data []opts.PieData) {
 		}
 		return cmp.Compare(a.Name, b.Name)
 	})
+}
+
+// collectSummaries materialises every day, which is what the chart builders still take. It is a
+// bridge while the builders move to the slim series, and goes away with them.
+func collectSummaries(dataFolder string) ([]summary.SummaryRecord, error) {
+	seq, err := summary.GetSummaries(dataFolder)
+	if err != nil {
+		return nil, err
+	}
+	var out []summary.SummaryRecord
+	for r := range seq {
+		out = append(out, r)
+	}
+	return out, nil
 }

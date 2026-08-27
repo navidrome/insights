@@ -9,6 +9,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/navidrome/insights/internal/consts"
 )
 
 var _ = Describe("SaveSummary", func() {
@@ -34,8 +36,12 @@ var _ = Describe("SaveSummary", func() {
 	It("writes a summary that reads back", func() {
 		Expect(SaveSummary(dir, Summary{NumInstances: 7}, day)).To(Succeed())
 
-		summaries, err := GetSummaries(dir)
+		seq, err := GetSummaries(dir)
 		Expect(err).ToNot(HaveOccurred())
+		var summaries []SummaryRecord
+		for r := range seq {
+			summaries = append(summaries, r)
+		}
 		Expect(summaries).To(HaveLen(1))
 		Expect(summaries[0].Data.NumInstances).To(Equal(int64(7)))
 	})
@@ -98,5 +104,108 @@ var _ = Describe("SaveSummary", func() {
 			Expect(got.Versions).To(HaveLen(keys))
 			reads++
 		}
+	})
+
+	Describe("GetSummaries streaming", func() {
+		var dir string
+
+		write := func(rel string, s Summary) {
+			GinkgoHelper()
+			p := filepath.Join(dir, consts.SummariesDir, rel)
+			Expect(os.MkdirAll(filepath.Dir(p), 0o750)).To(Succeed())
+			b, err := json.Marshal(s)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(os.WriteFile(p, b, 0o600)).To(Succeed())
+		}
+
+		collect := func() []SummaryRecord {
+			GinkgoHelper()
+			seq, err := GetSummaries(dir)
+			Expect(err).ToNot(HaveOccurred())
+			var out []SummaryRecord
+			for r := range seq {
+				out = append(out, r)
+			}
+			return out
+		}
+
+		BeforeEach(func() { dir = GinkgoT().TempDir() })
+
+		It("yields days oldest first", func() {
+			write("2026/03/summary-2026-03-02.json", Summary{NumInstances: 2})
+			write("2026/01/summary-2026-01-31.json", Summary{NumInstances: 1})
+			write("2026/03/summary-2026-03-01.json", Summary{NumInstances: 3})
+
+			var dates []string
+			for _, r := range collect() {
+				dates = append(dates, r.Time.Format(consts.DateFormat))
+			}
+			Expect(dates).To(Equal([]string{"2026-01-31", "2026-03-01", "2026-03-02"}))
+		})
+
+		It("ignores a summary nested below the YYYY/MM layout", func() {
+			write("2026/04/summary-2026-04-12.json", Summary{NumInstances: 10})
+			write("2026/04/bkp/summary-2026-04-12.json", Summary{NumInstances: 10})
+
+			Expect(collect()).To(HaveLen(1), "the copy under bkp/ is not a summary")
+		})
+
+		It("can be ranged over more than once", func() {
+			write("2026/01/summary-2026-01-01.json", Summary{NumInstances: 1})
+			write("2026/01/summary-2026-01-02.json", Summary{NumInstances: 2})
+
+			seq, err := GetSummaries(dir)
+			Expect(err).ToNot(HaveOccurred())
+
+			count := func() int {
+				n := 0
+				for range seq {
+					n++
+				}
+				return n
+			}
+			Expect(count()).To(Equal(2))
+			Expect(count()).To(Equal(2), "a second pass must re-read the files")
+		})
+
+		It("stops early without error when the consumer breaks", func() {
+			write("2026/01/summary-2026-01-01.json", Summary{NumInstances: 1})
+			write("2026/01/summary-2026-01-02.json", Summary{NumInstances: 2})
+
+			seq, err := GetSummaries(dir)
+			Expect(err).ToNot(HaveOccurred())
+			n := 0
+			for range seq {
+				n++
+				break
+			}
+			Expect(n).To(Equal(1))
+		})
+
+		It("skips days with no instances", func() {
+			write("2026/01/summary-2026-01-01.json", Summary{NumInstances: 0})
+			write("2026/01/summary-2026-01-02.json", Summary{NumInstances: 5})
+
+			Expect(collect()).To(HaveLen(1))
+		})
+
+		It("returns no error when the summaries directory does not exist", func() {
+			seq, err := GetSummaries(GinkgoT().TempDir())
+			Expect(err).ToNot(HaveOccurred())
+			n := 0
+			for range seq {
+				n++
+			}
+			Expect(n).To(Equal(0))
+		})
+
+		It("skips a malformed file and keeps going", func() {
+			write("2026/01/summary-2026-01-01.json", Summary{NumInstances: 1})
+			bad := filepath.Join(dir, consts.SummariesDir, "2026/01/summary-2026-01-02.json")
+			Expect(os.WriteFile(bad, []byte("{not json"), 0o600)).To(Succeed())
+			write("2026/01/summary-2026-01-03.json", Summary{NumInstances: 3})
+
+			Expect(collect()).To(HaveLen(2))
+		})
 	})
 })

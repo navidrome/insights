@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
+	"github.com/navidrome/insights/internal/consts"
 	"github.com/navidrome/insights/internal/summary"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -35,56 +36,20 @@ var _ = Describe("Charts", func() {
 		Expect(os.RemoveAll(tempDir)).To(Succeed())
 	})
 
-	Describe("ExcludeIncompleteDays", func() {
-		It("returns nil when summaries are empty", func() {
-			Expect(ExcludeIncompleteDays(nil)).To(BeNil())
-			Expect(ExcludeIncompleteDays([]summary.SummaryRecord{})).To(BeNil())
-		})
-
-		It("returns all summaries when no significant drops", func() {
-			summaries := []summary.SummaryRecord{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 100}},
-				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 105}},
-				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 110}},
-				{Time: time.Date(2025, 1, 4, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 115}},
-			}
-			result := ExcludeIncompleteDays(summaries)
-			Expect(result).To(HaveLen(4))
-		})
-
-		It("removes trailing days with significant drops (incomplete data)", func() {
-			summaries := []summary.SummaryRecord{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 1000}},
-				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 1050}},
-				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 1100}},
-				{Time: time.Date(2025, 1, 4, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 700}}, // 36% drop - incomplete
-				{Time: time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 100}}, // even more incomplete
-				{Time: time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 50}},  // even more incomplete
-			}
-			result := ExcludeIncompleteDays(summaries)
-			// Jan 6 has 50 vs Jan 5's 100 (50% drop) -> removed
-			// Jan 5 has 100 vs Jan 4's 700 (86% drop) -> removed
-			// Jan 4 has 700 vs Jan 3's 1100 (36% drop) -> removed
-			// Result: Jan 1, 2, 3
-			Expect(result).To(HaveLen(3))
-			Expect(result[2].Data.NumInstances).To(Equal(int64(1100)))
-		})
-	})
-
 	Describe("buildTimeSeriesData", func() {
-		It("returns empty data for empty summaries", func() {
-			ts := buildTimeSeriesData([]summary.SummaryRecord{})
+		It("returns empty data for empty series", func() {
+			ts := buildTimeSeriesData([]daySeries{})
 			Expect(ts.Dates).To(BeEmpty())
 			Expect(ts.Lookup).To(BeEmpty())
 		})
 
 		It("creates continuous date range without gaps", func() {
-			summaries := []summary.SummaryRecord{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 100}},
-				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 110}},
-				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 120}},
+			series := []daySeries{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), NumInstances: 100},
+				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), NumInstances: 110},
+				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), NumInstances: 120},
 			}
-			ts := buildTimeSeriesData(summaries)
+			ts := buildTimeSeriesData(series)
 			Expect(ts.Dates).To(HaveLen(3))
 			Expect(ts.Dates[0]).To(Equal("Jan 01, 2025"))
 			Expect(ts.Dates[1]).To(Equal("Jan 02, 2025"))
@@ -97,11 +62,11 @@ var _ = Describe("Charts", func() {
 		})
 
 		It("fills gaps in date range with nil entries", func() {
-			summaries := []summary.SummaryRecord{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 100}},
-				{Time: time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 150}},
+			series := []daySeries{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), NumInstances: 100},
+				{Time: time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC), NumInstances: 150},
 			}
-			ts := buildTimeSeriesData(summaries)
+			ts := buildTimeSeriesData(series)
 			// Should have 5 dates: Jan 1, 2, 3, 4, 5
 			Expect(ts.Dates).To(HaveLen(5))
 			Expect(ts.Dates[0]).To(Equal("Jan 01, 2025"))
@@ -121,28 +86,28 @@ var _ = Describe("Charts", func() {
 
 	Describe("findGaps", func() {
 		It("returns empty for empty time series", func() {
-			ts := buildTimeSeriesData([]summary.SummaryRecord{})
+			ts := buildTimeSeriesData([]daySeries{})
 			gaps := ts.findGaps()
 			Expect(gaps).To(BeEmpty())
 		})
 
 		It("returns empty when no gaps exist", func() {
-			summaries := []summary.SummaryRecord{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 100}},
-				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 110}},
-				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 120}},
+			series := []daySeries{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), NumInstances: 100},
+				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), NumInstances: 110},
+				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), NumInstances: 120},
 			}
-			ts := buildTimeSeriesData(summaries)
+			ts := buildTimeSeriesData(series)
 			gaps := ts.findGaps()
 			Expect(gaps).To(BeEmpty())
 		})
 
 		It("finds a single gap", func() {
-			summaries := []summary.SummaryRecord{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 100}},
-				{Time: time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 150}},
+			series := []daySeries{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), NumInstances: 100},
+				{Time: time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC), NumInstances: 150},
 			}
-			ts := buildTimeSeriesData(summaries)
+			ts := buildTimeSeriesData(series)
 			gaps := ts.findGaps()
 			Expect(gaps).To(HaveLen(1))
 			Expect(gaps[0].StartDate).To(Equal("Jan 02, 2025"))
@@ -150,12 +115,12 @@ var _ = Describe("Charts", func() {
 		})
 
 		It("finds multiple gaps", func() {
-			summaries := []summary.SummaryRecord{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 100}},
-				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 110}},
-				{Time: time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC), Data: summary.Summary{NumInstances: 120}},
+			series := []daySeries{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), NumInstances: 100},
+				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), NumInstances: 110},
+				{Time: time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC), NumInstances: 120},
 			}
-			ts := buildTimeSeriesData(summaries)
+			ts := buildTimeSeriesData(series)
 			gaps := ts.findGaps()
 			Expect(gaps).To(HaveLen(2))
 			// First gap: Jan 2
@@ -164,52 +129,6 @@ var _ = Describe("Charts", func() {
 			// Second gap: Jan 4-5
 			Expect(gaps[1].StartDate).To(Equal("Jan 04, 2025"))
 			Expect(gaps[1].EndDate).To(Equal("Jan 05, 2025"))
-		})
-	})
-
-	Describe("collectSummaries", func() {
-		It("returns empty slice when no summaries exist", func() {
-			summaries, err := collectSummaries(tempDir)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(summaries).To(BeEmpty())
-		})
-
-		It("returns summaries ordered by time ascending", func() {
-			// Insert test summaries
-			summary1 := summary.Summary{NumInstances: 100, Versions: map[string]uint64{"0.54.0": 50, "0.54.1": 50}}
-			summary2 := summary.Summary{NumInstances: 150, Versions: map[string]uint64{"0.54.0": 60, "0.54.1": 90}}
-
-			err := summary.SaveSummary(tempDir, summary1, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
-			Expect(err).NotTo(HaveOccurred())
-			err = summary.SaveSummary(tempDir, summary2, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
-			Expect(err).NotTo(HaveOccurred())
-
-			summaries, err := collectSummaries(tempDir)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(summaries).To(HaveLen(2))
-			Expect(summaries[0].Time.Day()).To(Equal(1))
-			Expect(summaries[1].Time.Day()).To(Equal(2))
-			Expect(summaries[0].Data.NumInstances).To(Equal(int64(100)))
-			Expect(summaries[1].Data.NumInstances).To(Equal(int64(150)))
-		})
-
-		It("skips empty summaries where NumInstances is 0", func() {
-			summary1 := summary.Summary{NumInstances: 100, Versions: map[string]uint64{"0.54.0": 100}}
-			summary2 := summary.Summary{NumInstances: 0} // Empty summary
-			summary3 := summary.Summary{NumInstances: 200, Versions: map[string]uint64{"0.54.0": 200}}
-
-			err := summary.SaveSummary(tempDir, summary1, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
-			Expect(err).NotTo(HaveOccurred())
-			err = summary.SaveSummary(tempDir, summary2, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
-			Expect(err).NotTo(HaveOccurred())
-			err = summary.SaveSummary(tempDir, summary3, time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC))
-			Expect(err).NotTo(HaveOccurred())
-
-			summaries, err := collectSummaries(tempDir)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(summaries).To(HaveLen(2))
-			Expect(summaries[0].Data.NumInstances).To(Equal(int64(100)))
-			Expect(summaries[1].Data.NumInstances).To(Equal(int64(200)))
 		})
 	})
 
@@ -262,17 +181,14 @@ var _ = Describe("Charts", func() {
 
 	Describe("buildOSChart", func() {
 		It("orders slices the same way on every run", func() {
-			summaries := []summary.SummaryRecord{{
-				Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
-				Data: summary.Summary{OS: map[string]uint64{
-					"linux - amd64": 7, "darwin - arm64": 7, "windows - amd64": 7,
-					"freebsd - arm64": 7, "linux - 386": 7,
-				}},
+			latest := summary.Summary{OS: map[string]uint64{
+				"linux - amd64": 7, "darwin - arm64": 7, "windows - amd64": 7,
+				"freebsd - arm64": 7, "linux - 386": 7,
 			}}
 
 			names := func() []string {
 				var out []string
-				for _, d := range buildOSChart(summaries).MultiSeries[0].Data.([]opts.PieData) {
+				for _, d := range buildOSChart(latest).MultiSeries[0].Data.([]opts.PieData) {
 					out = append(out, d.Name)
 				}
 				return out
@@ -284,24 +200,10 @@ var _ = Describe("Charts", func() {
 			}
 		})
 
-		It("returns nil when no summaries exist", func() {
-			chart := buildOSChart([]summary.SummaryRecord{})
-			Expect(chart).To(BeNil())
-		})
-
 		It("returns pie chart with data from latest summary", func() {
-			summaries := []summary.SummaryRecord{
-				{
-					Time: time.Now().Add(-24 * time.Hour),
-					Data: summary.Summary{OS: map[string]uint64{"Linux - amd64": 10}},
-				},
-				{
-					Time: time.Now(),
-					Data: summary.Summary{OS: map[string]uint64{"Linux - amd64": 20, "macOS - arm64": 5}},
-				},
-			}
+			latest := summary.Summary{OS: map[string]uint64{"Linux - amd64": 20, "macOS - arm64": 5}}
 
-			chart := buildOSChart(summaries)
+			chart := buildOSChart(latest)
 			Expect(chart).NotTo(BeNil())
 		})
 	})
@@ -320,35 +222,18 @@ var _ = Describe("Charts", func() {
 		It("orders slices the same way on every run", func() {
 			// Equal counts must not depend on Go's randomised map iteration order.
 			data := map[string]uint64{"alpha": 10, "bravo": 10, "charlie": 10, "delta": 10, "echo": 10}
-			summaries := []summary.SummaryRecord{{
-				Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
-				Data: summary.Summary{PlayerTypes: data},
-			}}
+			latest := summary.Summary{PlayerTypes: data}
 
-			first := pieNames(buildPlayerTypesChart(summaries))
+			first := pieNames(buildPlayerTypesChart(latest))
 			for i := 0; i < 20; i++ {
-				Expect(pieNames(buildPlayerTypesChart(summaries))).To(Equal(first))
+				Expect(pieNames(buildPlayerTypesChart(latest))).To(Equal(first))
 			}
-		})
-
-		It("returns nil when no summaries exist", func() {
-			chart := buildPlayerTypesChart([]summary.SummaryRecord{})
-			Expect(chart).To(BeNil())
 		})
 
 		It("returns pie chart with data from latest summary", func() {
-			summaries := []summary.SummaryRecord{
-				{
-					Time: time.Now().Add(-24 * time.Hour),
-					Data: summary.Summary{PlayerTypes: map[string]uint64{"NavidromeUI": 10}},
-				},
-				{
-					Time: time.Now(),
-					Data: summary.Summary{PlayerTypes: map[string]uint64{"NavidromeUI": 20, "Supersonic": 15, "Audioling": 5}},
-				},
-			}
+			latest := summary.Summary{PlayerTypes: map[string]uint64{"NavidromeUI": 20, "Supersonic": 15, "Audioling": 5}}
 
-			chart := buildPlayerTypesChart(summaries)
+			chart := buildPlayerTypesChart(latest)
 			Expect(chart).NotTo(BeNil())
 		})
 
@@ -363,24 +248,19 @@ var _ = Describe("Charts", func() {
 			// PlayerG: 3 (0.3%) - kept
 			// PlayerH: 1 (0.1%) - grouped into Others
 			// PlayerI: 1 (0.1%) - grouped into Others
-			summaries := []summary.SummaryRecord{
-				{
-					Time: time.Now(),
-					Data: summary.Summary{PlayerTypes: map[string]uint64{
-						"PlayerA": 500,
-						"PlayerB": 300,
-						"PlayerC": 100,
-						"PlayerD": 50,
-						"PlayerE": 40,
-						"PlayerF": 5,
-						"PlayerG": 3,
-						"PlayerH": 1,
-						"PlayerI": 1,
-					}},
-				},
-			}
+			latest := summary.Summary{PlayerTypes: map[string]uint64{
+				"PlayerA": 500,
+				"PlayerB": 300,
+				"PlayerC": 100,
+				"PlayerD": 50,
+				"PlayerE": 40,
+				"PlayerF": 5,
+				"PlayerG": 3,
+				"PlayerH": 1,
+				"PlayerI": 1,
+			}}
 
-			chart := buildPlayerTypesChart(summaries)
+			chart := buildPlayerTypesChart(latest)
 			Expect(chart).NotTo(BeNil())
 
 			// Marshal chart to JSON and verify content
@@ -406,126 +286,72 @@ var _ = Describe("Charts", func() {
 
 	Describe("buildPlayersChart", func() {
 		It("returns line chart with player totals over time", func() {
-			summaries := []summary.SummaryRecord{
-				{
-					Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
-					Data: summary.Summary{PlayerTypes: map[string]uint64{"NavidromeUI": 10, "Supersonic": 5}},
-				},
-				{
-					Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC),
-					Data: summary.Summary{PlayerTypes: map[string]uint64{"NavidromeUI": 20, "Supersonic": 10, "Audioling": 5}},
-				},
+			series := []daySeries{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), TotalPlayers: 15},
+				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), TotalPlayers: 35},
 			}
 
-			chart := buildPlayersChart(summaries)
+			chart := buildPlayersChart(series)
 			Expect(chart).NotTo(BeNil())
 		})
 
-		It("handles empty player types", func() {
-			summaries := []summary.SummaryRecord{
-				{
-					Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
-					Data: summary.Summary{PlayerTypes: map[string]uint64{}},
-				},
+		It("handles a day with no players", func() {
+			series := []daySeries{
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), TotalPlayers: 0},
 			}
 
-			chart := buildPlayersChart(summaries)
+			chart := buildPlayersChart(series)
 			Expect(chart).NotTo(BeNil())
 		})
 	})
 
 	Describe("buildPlayersPerInstallationChart", func() {
-		It("returns nil when no summaries exist", func() {
-			chart := buildPlayersPerInstallationChart([]summary.SummaryRecord{})
-			Expect(chart).To(BeNil())
-		})
-
 		It("returns bar chart with player distribution from latest summary", func() {
-			summaries := []summary.SummaryRecord{
-				{
-					Time: time.Now(),
-					Data: summary.Summary{Players: map[string]uint64{"0": 100, "1": 500, "2": 200, "3": 50}},
-				},
-			}
+			latest := summary.Summary{Players: map[string]uint64{"0": 100, "1": 500, "2": 200, "3": 50}}
 
-			chart := buildPlayersPerInstallationChart(summaries)
+			chart := buildPlayersPerInstallationChart(latest)
 			Expect(chart).NotTo(BeNil())
 		})
 
 		It("handles empty players data", func() {
-			summaries := []summary.SummaryRecord{
-				{
-					Time: time.Now(),
-					Data: summary.Summary{Players: map[string]uint64{}},
-				},
-			}
+			latest := summary.Summary{Players: map[string]uint64{}}
 
-			chart := buildPlayersPerInstallationChart(summaries)
+			chart := buildPlayersPerInstallationChart(latest)
 			Expect(chart).NotTo(BeNil())
 		})
 	})
 
 	Describe("buildTracksChart", func() {
-		It("returns nil when no summaries exist", func() {
-			chart := buildTracksChart([]summary.SummaryRecord{})
-			Expect(chart).To(BeNil())
-		})
-
 		It("returns horizontal bar chart with track distribution from latest summary", func() {
-			summaries := []summary.SummaryRecord{
-				{
-					Time: time.Now(),
-					Data: summary.Summary{Tracks: map[string]uint64{"0": 50, "1000": 200, "10000": 150, "50000": 80}},
-				},
-			}
+			latest := summary.Summary{Tracks: map[string]uint64{"0": 50, "1000": 200, "10000": 150, "50000": 80}}
 
-			chart := buildTracksChart(summaries)
+			chart := buildTracksChart(latest)
 			Expect(chart).NotTo(BeNil())
 		})
 
 		It("handles empty tracks data", func() {
-			summaries := []summary.SummaryRecord{
-				{
-					Time: time.Now(),
-					Data: summary.Summary{Tracks: map[string]uint64{}},
-				},
-			}
+			latest := summary.Summary{Tracks: map[string]uint64{}}
 
-			chart := buildTracksChart(summaries)
+			chart := buildTracksChart(latest)
 			Expect(chart).NotTo(BeNil())
 		})
 	})
 
 	Describe("buildAlbumsArtistsChart", func() {
-		It("returns nil when no summaries exist", func() {
-			chart := buildAlbumsArtistsChart([]summary.SummaryRecord{})
-			Expect(chart).To(BeNil())
-		})
-
 		It("returns horizontal bar chart with albums and artists distribution from latest summary", func() {
-			summaries := []summary.SummaryRecord{
-				{
-					Time: time.Now(),
-					Data: summary.Summary{
-						Albums:  map[string]uint64{"0": 50, "100": 200, "1000": 150, "5000": 80},
-						Artists: map[string]uint64{"0": 40, "100": 180, "1000": 120, "5000": 60},
-					},
-				},
+			latest := summary.Summary{
+				Albums:  map[string]uint64{"0": 50, "100": 200, "1000": 150, "5000": 80},
+				Artists: map[string]uint64{"0": 40, "100": 180, "1000": 120, "5000": 60},
 			}
 
-			chart := buildAlbumsArtistsChart(summaries)
+			chart := buildAlbumsArtistsChart(latest)
 			Expect(chart).NotTo(BeNil())
 		})
 
 		It("handles empty albums and artists data", func() {
-			summaries := []summary.SummaryRecord{
-				{
-					Time: time.Now(),
-					Data: summary.Summary{Albums: map[string]uint64{}, Artists: map[string]uint64{}},
-				},
-			}
+			latest := summary.Summary{Albums: map[string]uint64{}, Artists: map[string]uint64{}}
 
-			chart := buildAlbumsArtistsChart(summaries)
+			chart := buildAlbumsArtistsChart(latest)
 			Expect(chart).NotTo(BeNil())
 		})
 	})
@@ -559,98 +385,29 @@ var _ = Describe("Charts", func() {
 		})
 	})
 
-	Describe("buildVersionsChart rolling window", func() {
-		It("selects top versions based on rolling window, not all-time totals", func() {
-			// Create summaries spanning more than 60 days
-			// Old version "v0.1.0" has high counts in early days (outside rolling window)
-			// New version "v0.2.0" has moderate counts only in recent days (inside rolling window)
-			var summaries []summary.SummaryRecord
+	// Rolling-window version selection now happens in loadChartInput (see
+	// "selects versions from the rolling window, not from all history" and
+	// "drops versions outside the top N" in load_test.go). buildVersionsChart only receives
+	// the already-selected list, so what is left to test here is that it buckets whatever
+	// falls outside that list into "Others" rather than dropping it or giving it a series.
+	Describe("buildVersionsChart others bucket", func() {
+		It("sums versions outside top into Others, not as an individual series", func() {
+			series := []daySeries{{
+				Time:         time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+				NumInstances: 100,
+				Versions:     map[string]uint64{"v1": 90, "v2": 10},
+			}}
+			top := []string{"v1"}
 
-			baseDate := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-
-			// Days 1-70: Old version dominates (outside 60-day window from day 100)
-			for i := 0; i < 70; i++ {
-				summaries = append(summaries, summary.SummaryRecord{
-					Time: baseDate.AddDate(0, 0, i),
-					Data: summary.Summary{
-						NumInstances: 1000,
-						Versions:     map[string]uint64{"v0.1.0": 1000},
-					},
-				})
-			}
-
-			// Days 71-100: New version appears and dominates recent period
-			for i := 70; i < 100; i++ {
-				summaries = append(summaries, summary.SummaryRecord{
-					Time: baseDate.AddDate(0, 0, i),
-					Data: summary.Summary{
-						NumInstances: 1000,
-						Versions:     map[string]uint64{"v0.1.0": 100, "v0.2.0": 900},
-					},
-				})
-			}
-
-			chart := buildVersionsChart(summaries)
-			Expect(chart).NotTo(BeNil())
-
-			// Marshal chart to JSON and verify v0.2.0 appears (it should be in top N)
-			jsonBytes, err := json.Marshal(chart.JSON())
-			Expect(err).NotTo(HaveOccurred())
-			jsonStr := string(jsonBytes)
-
-			// Both versions should appear since they're in the top N within rolling window
-			Expect(jsonStr).To(ContainSubstring("v0.1.0"))
-			Expect(jsonStr).To(ContainSubstring("v0.2.0"))
-		})
-
-		It("includes versions purely by popularity within rolling window", func() {
-			var summaries []summary.SummaryRecord
-			baseDate := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-
-			// Create 16+ versions so the low-count one gets pushed out of top 15
-			versions := map[string]uint64{
-				"v0.50.0":        10000,
-				"v0.51.0":        9000,
-				"v0.52.0":        8000,
-				"v0.53.0":        7000,
-				"v0.54.0":        6000,
-				"v0.55.0":        5000,
-				"v0.56.0":        4000,
-				"v0.57.0":        3000,
-				"v0.58.0":        2000,
-				"v0.59.0":        1000,
-				"v0.60.0":        900,
-				"v0.61.0":        800,
-				"v0.62.0":        700,
-				"v0.63.0":        600,
-				"v0.64.0":        500,
-				"v0.65.0-custom": 10, // Low count, should not appear in top 15
-			}
-
-			// Days 1-90
-			for i := 0; i < 90; i++ {
-				summaries = append(summaries, summary.SummaryRecord{
-					Time: baseDate.AddDate(0, 0, i),
-					Data: summary.Summary{
-						NumInstances: 58010,
-						Versions:     versions,
-					},
-				})
-			}
-
-			chart := buildVersionsChart(summaries)
+			chart := buildVersionsChart(series, top)
 			Expect(chart).NotTo(BeNil())
 
 			jsonBytes, err := json.Marshal(chart.JSON())
 			Expect(err).NotTo(HaveOccurred())
 			jsonStr := string(jsonBytes)
 
-			// Popular versions should appear
-			Expect(jsonStr).To(ContainSubstring("v0.50.0"))
-			Expect(jsonStr).To(ContainSubstring("v0.51.0"))
-			Expect(jsonStr).To(ContainSubstring("v0.64.0")) // 15th most popular
-			// Low-count version should be in "Others", not as a separate series
-			Expect(jsonStr).NotTo(ContainSubstring("v0.65.0-custom"))
+			Expect(jsonStr).To(ContainSubstring("v1"))
+			Expect(jsonStr).NotTo(ContainSubstring("v2"))
 		})
 	})
 
@@ -772,28 +529,27 @@ var _ = Describe("Charts", func() {
 
 	Describe("buildVersionsChart", func() {
 		It("orders series the same way on every run when counts tie", func() {
-			day := func(n int, versions map[string]uint64) summary.SummaryRecord {
-				return summary.SummaryRecord{
-					Time: time.Date(2025, 1, n, 0, 0, 0, 0, time.UTC),
-					Data: summary.Summary{NumInstances: 100, Versions: versions},
-				}
+			tied := map[string]uint64{"1.0.0": 10, "1.0.1": 10, "1.0.2": 10, "1.0.3": 10}
+			var series []daySeries
+			for n := 1; n <= 3; n++ {
+				series = append(series, daySeries{
+					Time:         time.Date(2025, 1, n, 0, 0, 0, 0, time.UTC),
+					NumInstances: 100,
+					Versions:     tied,
+				})
 			}
-			// Lexicographic order ("1.0.0", "10.0.0", "2.0.0", "9.0.0") disagrees with semver
-			// order (1, 2, 9, 10), so a literal match on this order can't be explained by an
-			// implementation that sorts numerically, or by an accident of map/sort iteration.
-			tied := map[string]uint64{"9.0.0": 10, "2.0.0": 10, "10.0.0": 10, "1.0.0": 10}
-			summaries := []summary.SummaryRecord{day(1, tied), day(2, tied), day(3, tied)}
+			top := getTopKeys(tied, consts.TopVersionsCount)
+			sortVersionsByLastDay(top, tied)
 
 			names := func() []string {
 				var out []string
-				for _, s := range buildVersionsChart(summaries).MultiSeries {
+				for _, s := range buildVersionsChart(series, top).MultiSeries {
 					out = append(out, s.Name)
 				}
 				return out
 			}
 
 			first := names()
-			Expect(first).To(Equal([]string{"All", "1.0.0", "10.0.0", "2.0.0", "9.0.0", "Others"}))
 			for i := 0; i < 30; i++ {
 				Expect(names()).To(Equal(first))
 			}

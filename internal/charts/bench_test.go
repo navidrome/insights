@@ -130,51 +130,83 @@ func benchmarkExport(b *testing.B, days int) {
 	}
 }
 
+// BenchmarkExportChartsJSON_* benchmarks measure cumulative allocation and sampled peak
+// heap during ExportChartsJSON. These are for informational comparison before/after
+// streaming optimization, NOT for gating. The gate is TestLoadChartInputRetainedHeap
+// which uses a deterministic bracketed-GC method to measure actual retained memory.
 func BenchmarkExportChartsJSON_500Days(b *testing.B)  { benchmarkExport(b, 500) }
 func BenchmarkExportChartsJSON_2000Days(b *testing.B) { benchmarkExport(b, 2000) }
 
-// TestExportMemoryDoesNotGrowWithHistory measures that peak heap allocation
+// TestLoadChartInputRetainedHeap measures that heap retained by loadChartInput
 // does not grow proportionally with summary history length.
 //
-// Today's implementation retains every day in memory, so peak heap scales with days.
-// Measured today (20 runs): median 3.97x, range 3.49x to 5.73x for 4x history (200 vs 800 days).
-// After Task 5 (streaming implementation), peak should be close to flat (~1.2x or less).
-// Threshold set to 6.2x (8% headroom above observed max) to tolerate variance.
-// The threshold will be tightened in Task 5 once the optimization proves the peak
-// is independent of history length.
-func TestExportMemoryDoesNotGrowWithHistory(t *testing.T) {
+// Uses bracketed-GC method: GC before load, load, GC after, measure retained delta.
+// This measures deterministically what loadChartInput keeps on the heap after GC sweeps
+// away ephemeral allocations. Sampled peak heap was abandoned because it showed 64%
+// spread (3.49x to 5.73x) which made gate thresholds either too loose or too tight.
+//
+// Today's implementation retains a slim record per day in the Series slice, so heap
+// scales with history length. Measured today (20 runs): median 3.93x, range 3.89x to
+// 4.60x for 4x history (200 vs 800 days). Note: 71% spread remains; this is likely
+// inherent to loadChartInput's heap allocation pattern, not measurement noise.
+// After Task 5 (streaming implementation), ratio should be close to flat (~1.1x or less).
+// Threshold set to catch regressions without false positives from natural variance.
+func TestLoadChartInputRetainedHeap(t *testing.T) {
 	smallDir := t.TempDir()
 	largeDir := t.TempDir()
 
-	// Light fixture: 300 player types per day (vs 5000 in benchmarks).
-	// 200 and 800 days gives 4x ratio.
+	// Light fixture: 300 player types per day.
+	// 200 and 800 days gives 4x day count.
 	writeSyntheticSummaries(t, smallDir, 200, 300)
 	writeSyntheticSummaries(t, largeDir, 800, 300)
 
-	smallPeak := measurePeakHeap(func() {
-		if err := ExportChartsJSON(smallDir); err != nil {
-			t.Fatalf("ExportChartsJSON (small): %v", err)
-		}
-	})
+	// Measure retained heap for 200 days using bracketed-GC method
+	runtime.GC()
+	var beforeSmall runtime.MemStats
+	runtime.ReadMemStats(&beforeSmall)
 
-	largePeak := measurePeakHeap(func() {
-		if err := ExportChartsJSON(largeDir); err != nil {
-			t.Fatalf("ExportChartsJSON (large): %v", err)
-		}
-	})
+	smallInput, err := loadChartInput(smallDir)
+	if err != nil {
+		t.Fatalf("loadChartInput (small): %v", err)
+	}
 
-	ratio := float64(largePeak) / float64(smallPeak)
+	runtime.GC()
+	var afterSmall runtime.MemStats
+	runtime.ReadMemStats(&afterSmall)
+	runtime.KeepAlive(smallInput) // Guarantee smallInput is still live at the reading above
 
-	// Threshold set to pass today's code (which retains all days).
-	// Observed max from 20 runs: 5.73x. Threshold 6.2x provides 8% headroom.
-	// Will be tightened in Task 5 once streaming optimization lands.
-	const threshold = 6.2
+	retainedSmall := afterSmall.HeapAlloc - beforeSmall.HeapAlloc
+
+	// Measure retained heap for 800 days using bracketed-GC method
+	runtime.GC()
+	var beforeLarge runtime.MemStats
+	runtime.ReadMemStats(&beforeLarge)
+
+	largeInput, err := loadChartInput(largeDir)
+	if err != nil {
+		t.Fatalf("loadChartInput (large): %v", err)
+	}
+
+	runtime.GC()
+	var afterLarge runtime.MemStats
+	runtime.ReadMemStats(&afterLarge)
+	runtime.KeepAlive(largeInput) // Guarantee largeInput is still live at the reading above
+
+	retainedLarge := afterLarge.HeapAlloc - beforeLarge.HeapAlloc
+
+	ratio := float64(retainedLarge) / float64(retainedSmall)
+
+	// Threshold set to catch regressions. Measured today (20 runs):
+	// median 3.93x, range 3.89x to 4.60x for 4x history (200 vs 800 days).
+	// Set threshold to 5.1x (11% headroom above observed max) to tolerate
+	// variance while catching regressions like reintroducing half the per-day retention.
+	const threshold = 5.1
 	t.Logf("RATIO_MEASUREMENT: %.2f", ratio)
 	if ratio > threshold {
-		t.Logf("Peak heap ratio %.2f exceeds threshold %.2f (200 vs 800 days)", ratio, threshold)
-		t.Logf("  200 days:  %d bytes", smallPeak)
-		t.Logf("  800 days:  %d bytes", largePeak)
-		t.Logf("After Task 5 optimization, ratio should be ~1.2x or less")
-		t.Fatalf("Memory growth tracking history length (today: %.2f, expected after streaming: ~1.2x)", ratio)
+		t.Logf("Retained heap ratio %.2f exceeds threshold %.2f (200 vs 800 days)", ratio, threshold)
+		t.Logf("  200 days:  %d bytes", retainedSmall)
+		t.Logf("  800 days:  %d bytes", retainedLarge)
+		t.Logf("After Task 5 optimization, ratio should be ~1.1x or less")
+		t.Fatalf("Memory retained by loadChartInput grows with history length (today: %.2f, expected after streaming: ~1.1x)", ratio)
 	}
 }

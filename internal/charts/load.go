@@ -1,12 +1,52 @@
 package charts
 
 import (
+	"cmp"
 	"log"
+	"slices"
 	"time"
 
 	"github.com/navidrome/insights/internal/consts"
 	"github.com/navidrome/insights/internal/summary"
 )
+
+// getTopKeys returns the n keys with the highest values, ordered by value descending and then by
+// name. The name is what makes it a total order: the pairs come out of a map, so without it two
+// keys on equal counts swap between runs and change which ones make the cut at the boundary.
+func getTopKeys(m map[string]uint64, n int) []string {
+	type kv struct {
+		Key   string
+		Value uint64
+	}
+	pairs := make([]kv, 0, len(m))
+	for k, v := range m {
+		pairs = append(pairs, kv{k, v})
+	}
+	slices.SortFunc(pairs, func(a, b kv) int {
+		if c := cmp.Compare(b.Value, a.Value); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Key, b.Key)
+	})
+
+	n = min(n, len(pairs))
+	result := make([]string, n)
+	for i := range n {
+		result[i] = pairs[i].Key
+	}
+	return result
+}
+
+// sortVersionsByLastDay orders the selected versions by their count on the last day, breaking
+// ties on the name for the same reason getTopKeys does.
+func sortVersionsByLastDay(versions []string, lastDay map[string]uint64) {
+	slices.SortFunc(versions, func(a, b string) int {
+		if c := cmp.Compare(lastDay[b], lastDay[a]); c != 0 {
+			return c
+		}
+		return cmp.Compare(a, b)
+	})
+}
 
 // daySeries is what the time-series charts need from a day, and nothing else. A production
 // summary is about 180 KB, most of it the PlayerTypes tail; the two charts that walk every day
@@ -14,11 +54,19 @@ import (
 // export track the age of the service.
 type daySeries struct {
 	Time          time.Time
-	NumInstances  int64
 	TotalPlayers  uint64            // sum of Summary.PlayerTypes
 	Versions      map[string]uint64 // only the keys in chartInput.TopVersions
 	AllVersions   uint64            // sum of every version count that day, top-N and tail alike
 	OtherVersions uint64            // AllVersions minus the top-N slice: what the tail contributed
+}
+
+// dayInstances is pass 1's scratch record: the two fields the incomplete-tail trim reads, and
+// nothing else. It is deliberately not a daySeries. Sharing that type would carry NumInstances
+// into the series the charts consume, where nothing reads it, and invite a later contributor to
+// wire something onto a field no pass fills with a value anyone checked.
+type dayInstances struct {
+	Time         time.Time
+	NumInstances int64
 }
 
 // chartInput is everything the charts need: a slim record per day, the selected version names,
@@ -42,9 +90,9 @@ func loadChartInput(dataFolder string) (chartInput, error) {
 	if err != nil {
 		return chartInput{}, err
 	}
-	var scan []daySeries
+	var scan []dayInstances
 	for r := range seq {
-		scan = append(scan, daySeries{Time: r.Time, NumInstances: r.Data.NumInstances})
+		scan = append(scan, dayInstances{Time: r.Time, NumInstances: r.Data.NumInstances})
 	}
 	scan = trimIncomplete(scan)
 	if len(scan) == 0 {
@@ -88,9 +136,8 @@ func loadChartInput(dataFolder string) (chartInput, error) {
 			break
 		}
 		d := daySeries{
-			Time:         r.Time,
-			NumInstances: r.Data.NumInstances,
-			Versions:     make(map[string]uint64, len(top)),
+			Time:     r.Time,
+			Versions: make(map[string]uint64, len(top)),
 		}
 		for _, c := range r.Data.PlayerTypes {
 			d.TotalPlayers += c
@@ -137,7 +184,7 @@ func loadChartInput(dataFolder string) (chartInput, error) {
 // trimIncomplete drops trailing days whose instance count falls off a cliff. A day still being
 // collected reads as a collapse in installations, and plotting it makes the chart look like an
 // outage.
-func trimIncomplete(days []daySeries) []daySeries {
+func trimIncomplete(days []dayInstances) []dayInstances {
 	if len(days) == 0 {
 		return nil
 	}

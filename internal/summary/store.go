@@ -64,33 +64,42 @@ var summaryPathRegex = regexp.MustCompile(`^\d{4}/\d{2}/summary-(\d{4}-\d{2}-\d{
 func GetSummaries(dataFolder string) (iter.Seq[SummaryRecord], error) {
 	baseDir := filepath.Join(dataFolder, consts.SummariesDir)
 
-	dates, paths, err := summaryPaths(baseDir)
+	files, err := summaryPaths(baseDir)
 	if err != nil {
 		return nil, err
 	}
 
 	seq := func(yield func(SummaryRecord) bool) {
-		for i, p := range paths {
-			data, err := os.ReadFile(p) //#nosec G304 -- p comes from a walk of a controlled directory
+		for _, f := range files {
+			data, err := os.ReadFile(f.path) //#nosec G304 -- the path comes from a walk of a controlled directory
 			if err != nil {
-				log.Printf("Warning: skipping unreadable file %s: %v", p, err)
+				log.Printf("Warning: skipping unreadable file %s: %v", f.path, err)
 				continue
 			}
 			var s Summary
 			if err := json.Unmarshal(data, &s); err != nil {
-				log.Printf("Warning: skipping malformed file %s: %v", p, err)
+				log.Printf("Warning: skipping malformed file %s: %v", f.path, err)
 				continue
 			}
-			// Skip empty summaries
+			// A day nobody reported on carries no signal, and an empty series point would draw
+			// as a collapse in the charts.
 			if s.NumInstances == 0 {
 				continue
 			}
-			if !yield(SummaryRecord{Time: dates[i], Data: s}) {
+			if !yield(SummaryRecord{Time: f.date, Data: s}) {
 				return
 			}
 		}
 	}
 	return seq, nil
+}
+
+// datedPath pairs a summary file with the date in its name. Holding the two together rather than
+// in separate slices indexed in step means a later filter or reorder cannot silently pair a date
+// with another day's file.
+type datedPath struct {
+	date time.Time
+	path string
 }
 
 // summaryPaths returns every summary file under baseDir with its date, sorted oldest first.
@@ -100,12 +109,8 @@ func GetSummaries(dataFolder string) (iter.Seq[SummaryRecord], error) {
 // summaryPathRegex reads the date from the file name only and never checks it against the
 // surrounding YYYY/MM directory, so a file under a mismatched directory sorts wherever WalkDir's
 // lexical order puts that directory, not where its own date belongs.
-func summaryPaths(baseDir string) ([]time.Time, []string, error) {
-	type entry struct {
-		date time.Time
-		path string
-	}
-	var entries []entry
+func summaryPaths(baseDir string) ([]datedPath, error) {
+	var entries []datedPath
 
 	err := filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error { //#nosec G703 -- baseDir is from a controlled env var and constant
 		if err != nil {
@@ -134,20 +139,13 @@ func summaryPaths(baseDir string) ([]time.Time, []string, error) {
 			log.Printf("Warning: skipping file with invalid date %s: %v", path, err)
 			return nil
 		}
-		entries = append(entries, entry{date: t, path: path})
+		entries = append(entries, datedPath{date: t, path: path})
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
-		return nil, nil, err
+		return nil, err
 	}
 
-	slices.SortFunc(entries, func(a, b entry) int { return a.date.Compare(b.date) })
-
-	dates := make([]time.Time, len(entries))
-	paths := make([]string, len(entries))
-	for i, e := range entries {
-		dates[i] = e.date
-		paths[i] = e.path
-	}
-	return dates, paths, nil
+	slices.SortFunc(entries, func(a, b datedPath) int { return a.date.Compare(b.date) })
+	return entries, nil
 }

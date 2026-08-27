@@ -46,9 +46,9 @@ var _ = Describe("Charts", func() {
 
 		It("creates continuous date range without gaps", func() {
 			series := []daySeries{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), NumInstances: 100},
-				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), NumInstances: 110},
-				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), NumInstances: 120},
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)},
+				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)},
+				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC)},
 			}
 			ts := buildTimeSeriesData(series)
 			Expect(ts.Dates).To(HaveLen(3))
@@ -64,8 +64,8 @@ var _ = Describe("Charts", func() {
 
 		It("fills gaps in date range with nil entries", func() {
 			series := []daySeries{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), NumInstances: 100},
-				{Time: time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC), NumInstances: 150},
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)},
+				{Time: time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC)},
 			}
 			ts := buildTimeSeriesData(series)
 			// Should have 5 dates: Jan 1, 2, 3, 4, 5
@@ -94,9 +94,9 @@ var _ = Describe("Charts", func() {
 
 		It("returns empty when no gaps exist", func() {
 			series := []daySeries{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), NumInstances: 100},
-				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), NumInstances: 110},
-				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), NumInstances: 120},
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)},
+				{Time: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)},
+				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC)},
 			}
 			ts := buildTimeSeriesData(series)
 			gaps := ts.findGaps()
@@ -105,8 +105,8 @@ var _ = Describe("Charts", func() {
 
 		It("finds a single gap", func() {
 			series := []daySeries{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), NumInstances: 100},
-				{Time: time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC), NumInstances: 150},
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)},
+				{Time: time.Date(2025, 1, 5, 0, 0, 0, 0, time.UTC)},
 			}
 			ts := buildTimeSeriesData(series)
 			gaps := ts.findGaps()
@@ -117,9 +117,9 @@ var _ = Describe("Charts", func() {
 
 		It("finds multiple gaps", func() {
 			series := []daySeries{
-				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), NumInstances: 100},
-				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC), NumInstances: 110},
-				{Time: time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC), NumInstances: 120},
+				{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)},
+				{Time: time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC)},
+				{Time: time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC)},
 			}
 			ts := buildTimeSeriesData(series)
 			gaps := ts.findGaps()
@@ -626,9 +626,8 @@ var _ = Describe("Charts", func() {
 			var series []daySeries
 			for n := 1; n <= 3; n++ {
 				series = append(series, daySeries{
-					Time:         time.Date(2025, 1, n, 0, 0, 0, 0, time.UTC),
-					NumInstances: 100,
-					Versions:     tied,
+					Time:     time.Date(2025, 1, n, 0, 0, 0, 0, time.UTC),
+					Versions: tied,
 				})
 			}
 			top := getTopKeys(tied, consts.TopVersionsCount)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -12,6 +13,15 @@ import (
 
 	"github.com/navidrome/insights/internal/consts"
 )
+
+// collectSummaries drains GetSummaries into a slice, which is what assertions that index or
+// count days need. Shared across this package's tests so the drain is written once.
+func collectSummaries(dir string) []SummaryRecord {
+	GinkgoHelper()
+	seq, err := GetSummaries(dir)
+	Expect(err).ToNot(HaveOccurred())
+	return slices.Collect(seq)
+}
 
 var _ = Describe("SaveSummary", func() {
 	var dir string
@@ -36,12 +46,8 @@ var _ = Describe("SaveSummary", func() {
 	It("writes a summary that reads back", func() {
 		Expect(SaveSummary(dir, Summary{NumInstances: 7}, day)).To(Succeed())
 
-		seq, err := GetSummaries(dir)
-		Expect(err).ToNot(HaveOccurred())
-		var summaries []SummaryRecord
-		for r := range seq {
-			summaries = append(summaries, r)
-		}
+		summaries := collectSummaries(dir)
+
 		Expect(summaries).To(HaveLen(1))
 		Expect(summaries[0].Data.NumInstances).To(Equal(int64(7)))
 	})
@@ -112,21 +118,15 @@ var _ = Describe("SaveSummary", func() {
 		write := func(rel string, s Summary) {
 			GinkgoHelper()
 			p := filepath.Join(dir, consts.SummariesDir, rel)
-			Expect(os.MkdirAll(filepath.Dir(p), 0o750)).To(Succeed())
+			Expect(os.MkdirAll(filepath.Dir(p), consts.DirPermissions)).To(Succeed())
 			b, err := json.Marshal(s)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(os.WriteFile(p, b, 0o600)).To(Succeed())
+			Expect(os.WriteFile(p, b, consts.FilePermissions)).To(Succeed())
 		}
 
 		collect := func() []SummaryRecord {
 			GinkgoHelper()
-			seq, err := GetSummaries(dir)
-			Expect(err).ToNot(HaveOccurred())
-			var out []SummaryRecord
-			for r := range seq {
-				out = append(out, r)
-			}
-			return out
+			return collectSummaries(dir)
 		}
 
 		BeforeEach(func() { dir = GinkgoT().TempDir() })

@@ -166,12 +166,6 @@ func buildVersionsChart(series []daySeries, top []string) *charts.Line {
 	start := series[0].Time
 	topVersionsList := top
 
-	// Create a set of top versions for quick lookup
-	topVersionsSet := make(map[string]bool)
-	for _, v := range topVersionsList {
-		topVersionsSet[v] = true
-	}
-
 	// Create line chart
 	line := charts.NewLine()
 	line.SetGlobalOptions(
@@ -239,20 +233,15 @@ func buildVersionsChart(series []daySeries, top []string) *charts.Line {
 			}
 			othersData[i] = opts.LineData{Value: nil}
 		} else {
-			// Calculate totals for this day
-			var allTotal uint64
-			var othersCount uint64
-			for version, count := range s.Versions {
-				allTotal += count
-				if !topVersionsSet[version] {
-					othersCount += count
-				}
-			}
-			allData[i] = opts.LineData{Value: allTotal}
+			// AllVersions and OtherVersions are summed in loadChartInput's pass 3, while the
+			// day's full version map is still around: s.Versions only keeps the top-N slice,
+			// so a sum over it here would silently drop the tail (and, for an old day whose
+			// versions never make today's top-N, read as zero instead of that day's real count).
+			allData[i] = opts.LineData{Value: s.AllVersions}
 			for _, version := range topVersionsList {
 				versionData[version][i] = opts.LineData{Value: s.Versions[version]}
 			}
-			othersData[i] = opts.LineData{Value: othersCount}
+			othersData[i] = opts.LineData{Value: s.OtherVersions}
 		}
 	}
 

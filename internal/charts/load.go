@@ -12,10 +12,12 @@ import (
 // read a sum of that tail and a handful of version counts. Keeping the rest is what made chart
 // export track the age of the service.
 type daySeries struct {
-	Time         time.Time
-	NumInstances int64
-	TotalPlayers uint64            // sum of Summary.PlayerTypes
-	Versions     map[string]uint64 // only the keys in chartInput.TopVersions
+	Time          time.Time
+	NumInstances  int64
+	TotalPlayers  uint64            // sum of Summary.PlayerTypes
+	Versions      map[string]uint64 // only the keys in chartInput.TopVersions
+	AllVersions   uint64            // sum of every version count that day, top-N and tail alike
+	OtherVersions uint64            // AllVersions minus the top-N slice: what the tail contributed
 }
 
 // chartInput is everything the charts need: a slim record per day, the selected version names,
@@ -91,9 +93,15 @@ func loadChartInput(dataFolder string) (chartInput, error) {
 		for _, c := range r.Data.PlayerTypes {
 			d.TotalPlayers += c
 		}
+		// r.Data.Versions is the whole map, unfiltered, for exactly as long as this loop
+		// body runs: it is what the "All" and "Others" lines need, and the only place that
+		// full picture exists. d.Versions below keeps only the top-N slice of it.
 		for v, c := range r.Data.Versions {
+			d.AllVersions += c
 			if keep[v] {
 				d.Versions[v] = c
+			} else {
+				d.OtherVersions += c
 			}
 		}
 		in.Series = append(in.Series, d)

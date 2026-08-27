@@ -73,8 +73,13 @@ func measurePeakHeap(fn func()) uint64 {
 				var m runtime.MemStats
 				runtime.ReadMemStats(&m)
 				mu.Lock()
-				// Record delta from baseline, floored at zero
-				delta := m.HeapAlloc - baseline
+				// Record delta from baseline, floored at zero: HeapAlloc can dip below the
+				// baseline between GC cycles, and an unsigned subtraction without the floor
+				// would wrap to roughly 2^64 instead of reporting no growth.
+				var delta uint64
+				if m.HeapAlloc > baseline {
+					delta = m.HeapAlloc - baseline
+				}
 				if delta > peak {
 					peak = delta
 				}

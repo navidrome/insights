@@ -778,7 +778,10 @@ var _ = Describe("Charts", func() {
 					Data: summary.Summary{NumInstances: 100, Versions: versions},
 				}
 			}
-			tied := map[string]uint64{"1.0.0": 10, "1.0.1": 10, "1.0.2": 10, "1.0.3": 10}
+			// Lexicographic order ("1.0.0", "10.0.0", "2.0.0", "9.0.0") disagrees with semver
+			// order (1, 2, 9, 10), so a literal match on this order can't be explained by an
+			// implementation that sorts numerically, or by an accident of map/sort iteration.
+			tied := map[string]uint64{"9.0.0": 10, "2.0.0": 10, "10.0.0": 10, "1.0.0": 10}
 			summaries := []summary.SummaryRecord{day(1, tied), day(2, tied), day(3, tied)}
 
 			names := func() []string {
@@ -790,6 +793,7 @@ var _ = Describe("Charts", func() {
 			}
 
 			first := names()
+			Expect(first).To(Equal([]string{"All", "1.0.0", "10.0.0", "2.0.0", "9.0.0", "Others"}))
 			for i := 0; i < 30; i++ {
 				Expect(names()).To(Equal(first))
 			}

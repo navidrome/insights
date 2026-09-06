@@ -1,10 +1,11 @@
 package charts
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/navidrome/insights/internal/consts"
@@ -125,7 +126,7 @@ var _ = Describe("loadChartInput", func() {
 	// two-shot before/after fixture.
 	It("never returns a non-empty Series with a zero-value Latest while the last day's file is being rewritten concurrently", func() {
 		const days = 300
-		for n := 0; n < days; n++ {
+		for n := range days {
 			write(n, summary.Summary{
 				NumInstances: 100,
 				Versions:     map[string]uint64{"v": 1},
@@ -133,16 +134,26 @@ var _ = Describe("loadChartInput", func() {
 				PlayerTypes:  map[string]uint64{"a": 1},
 			})
 		}
-		lastPath := filepath.Join(dir, consts.SummariesDir, day(days-1).Format("2006"), day(days-1).Format("01"),
-			"summary-"+day(days-1).Format(consts.DateFormat)+".json")
-		goodBytes, err := json.Marshal(summary.Summary{
+		// SummaryFilePath, not a hand-built name: the torn file has to land on the path the
+		// reader actually opens. A second name for the same day is deduplicated away, and the
+		// writer below would then never win.
+		lastPath := summary.SummaryFilePath(dir, day(days-1))
+		raw, err := json.Marshal(summary.Summary{
 			NumInstances: 100,
 			Versions:     map[string]uint64{"v": 1},
 			OS:           map[string]uint64{"good": uint64(days - 1)},
 			PlayerTypes:  map[string]uint64{"a": 1},
 		})
 		Expect(err).ToNot(HaveOccurred())
-		badBytes := []byte("{not json")
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		_, err = gz.Write(raw)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(gz.Close()).To(Succeed())
+		goodBytes := buf.Bytes()
+		// A prefix of the real file, which is what a half-finished write leaves: a valid gzip
+		// header over a stream that ends early.
+		badBytes := goodBytes[:len(goodBytes)/2]
 
 		stop := make(chan struct{})
 		done := make(chan struct{})

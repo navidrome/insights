@@ -28,8 +28,9 @@ Usage: ./update.sh [process|ingest|both]
                       Collection keeps running throughout. No reports are lost.
 
   ingest              Upgrade the collector.
-                      Reports arriving during the swap are lost: Navidrome sends once
-                      and does not retry. Prefer a quiet hour.
+                      Caddy holds reports for the ingest route (lb_try_duration 30s)
+                      and retries, so a swap inside that window loses none. Past 30s
+                      it gives up, and Navidrome never resends: prefer a quiet hour.
 
   both                Upgrade both, ingest last so its outage is as short as possible.
 

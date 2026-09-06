@@ -24,7 +24,7 @@ worker never interrupts collection. Both run from the same `DATA_FOLDER`.
 1. Navidrome POSTs to `/collect` (rate-limited: 10 req/30min per IP) → `ingest` appends a JSON
    line to `reports/YYYY/MM/reports-YYYY-MM-DD.NNN.ndjson.gz`
 2. Cron every 2h: `summary.SummarizeData()` aggregates the last 5 days →
-   `summaries/YYYY/MM/summary-YYYY-MM-DD.json`
+   `summaries/YYYY/MM/summary-YYYY-MM-DD.json.gz`
 3. Cron daily 00:05 UTC: `charts.ExportChartsJSON()` → `web/chartdata/charts.json`
 4. Cron hourly at :30: `store.PurgeToFreeSpace()` deletes whole report days, oldest first,
    until the data volume has `consts.MinFreeBytes` free. Retention is driven by free space, not
@@ -109,4 +109,7 @@ within a session — opens a **new** segment `reports-YYYY-MM-DD.NNN.ndjson.gz`;
 appends to a segment written by an earlier one, so an unclean shutdown only truncates the tail
 of the segment that was open. Readers tolerate that truncation and skip to the next segment.
 
-All day boundaries are UTC. Summaries stay as JSON files in `summaries/`.
+All day boundaries are UTC. Summaries are gzipped JSON files in `summaries/`. Nothing writes the
+uncompressed `.json` form any more, but `GetSummaries` still reads it, so a plain file older
+builds left, or one decompressed by hand for inspection, keeps working. `prod/compress-summaries.sh`
+converts the leftovers in one pass; no code path depends on having run it.

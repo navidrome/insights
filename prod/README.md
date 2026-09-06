@@ -1,6 +1,7 @@
 # Production deployment
 
-`docker-compose.yml`, `Caddyfile` and `update.sh` are copied into the deploy directory,
+`docker-compose.yml`, `Caddyfile`, `update.sh` and `compress-summaries.sh` are copied into
+the deploy directory,
 and that same directory is the data volume (`.:/app`), so `reports/`, `summaries/` and
 `web/chartdata/` live beside them. The compose file runs both services as UID 1000, so
 that directory has to belong to it.
@@ -21,6 +22,20 @@ Both Go services run the same image and differ by `command`, `stop_grace_period`
 environment. The image is `FROM scratch` and holds three binaries and nothing else, so
 there is no shell in either container: inspect them from the host, not with
 `docker compose exec`.
+
+Summaries are gzipped JSON under `summaries/YYYY/MM/summary-YYYY-MM-DD.json.gz`. Older
+builds wrote them uncompressed; `process` still reads that form, so nothing breaks while
+both are on disk. To reclaim the space (about 27 MB down to 9 MB), run the one-time pass
+from the deploy directory, `-n` first to see what it would do:
+
+```sh
+sh compress-summaries.sh -n .
+sh compress-summaries.sh .
+```
+
+It is safe to interrupt and safe to repeat, it converts each day through a temporary file
+it reads back before unlinking the original, and it leaves the hand-made copies under
+`summaries/YYYY/MM/bkp/` alone.
 
 Reports are gzipped NDJSON under `reports/YYYY/MM/reports-YYYY-MM-DD.NNN.ndjson.gz`, one
 segment per writer session. Retention follows free space rather than age: the purge
@@ -80,7 +95,7 @@ Steps 1 and 2 must happen **before** the compose file lands.
 3. **Copy the three files** from the `prod/` directory of a checkout on the server:
 
    ```bash
-   cd /path/to/insights/prod && cp docker-compose.yml Caddyfile update.sh ~/
+   cd /path/to/insights/prod && cp docker-compose.yml Caddyfile update.sh compress-summaries.sh ~/
    ```
 
    All three are production-ready as-is: the staging ACME block in `Caddyfile` is

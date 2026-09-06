@@ -1,11 +1,14 @@
 package summary
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -21,6 +24,27 @@ func collectSummaries(dir string) []SummaryRecord {
 	seq, err := GetSummaries(dir)
 	Expect(err).ToNot(HaveOccurred())
 	return slices.Collect(seq)
+}
+
+// writeSummaryFile writes s under summaries/<rel>, gzipping it when rel names the .gz form, and
+// returns the path. Taking the layout from rel is what lets a spec place a file where SaveSummary
+// never would: under a mismatched YYYY/MM directory, or in both forms on the same day.
+func writeSummaryFile(dir, rel string, s Summary) string {
+	GinkgoHelper()
+	p := filepath.Join(dir, consts.SummariesDir, rel)
+	Expect(os.MkdirAll(filepath.Dir(p), consts.DirPermissions)).To(Succeed())
+	b, err := json.Marshal(s)
+	Expect(err).ToNot(HaveOccurred())
+	if strings.HasSuffix(rel, gzipExt) {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		_, err = gz.Write(b)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(gz.Close()).To(Succeed())
+		b = buf.Bytes()
+	}
+	Expect(os.WriteFile(p, b, consts.FilePermissions)).To(Succeed())
+	return p
 }
 
 var _ = Describe("SaveSummary", func() {
@@ -52,6 +76,22 @@ var _ = Describe("SaveSummary", func() {
 		Expect(summaries[0].Data.NumInstances).To(Equal(int64(7)))
 	})
 
+	It("writes the summary gzip compressed", func() {
+		Expect(SaveSummary(dir, Summary{NumInstances: 7}, day)).To(Succeed())
+
+		path := SummaryFilePath(dir, day)
+		Expect(path).To(HaveSuffix(".json.gz"))
+
+		f, err := os.Open(path) //#nosec G304 -- test-only path from the suite's TempDir
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() { _ = f.Close() })
+		gz, err := gzip.NewReader(f)
+		Expect(err).ToNot(HaveOccurred(), "the file on disk must be a gzip stream")
+		var got Summary
+		Expect(json.NewDecoder(gz).Decode(&got)).To(Succeed())
+		Expect(got.NumInstances).To(Equal(int64(7)))
+	})
+
 	It("leaves no temporary file behind", func() {
 		Expect(SaveSummary(dir, Summary{NumInstances: 7}, day)).To(Succeed())
 
@@ -61,7 +101,7 @@ var _ = Describe("SaveSummary", func() {
 		for _, e := range entries {
 			names = append(names, e.Name())
 		}
-		Expect(names).To(ConsistOf("summary-2026-08-03.json"))
+		Expect(names).To(ConsistOf("summary-2026-08-03.json.gz"))
 	})
 
 	// The reason the write has to be atomic: a reader landing in an O_TRUNC window logs
@@ -104,8 +144,11 @@ var _ = Describe("SaveSummary", func() {
 			}
 			data, err := os.ReadFile(path) //#nosec G304 -- test-only path from the suite's TempDir
 			Expect(err).ToNot(HaveOccurred())
+			gz, err := gzip.NewReader(bytes.NewReader(data))
+			Expect(err).ToNot(HaveOccurred(),
+				"read %d of %d bytes was not a complete summary: a save in progress must not be visible", reads, len(data))
 			var got Summary
-			Expect(json.Unmarshal(data, &got)).To(Succeed(),
+			Expect(json.NewDecoder(gz).Decode(&got)).To(Succeed(),
 				"read %d of %d bytes was not a complete summary: a save in progress must not be visible", reads, len(data))
 			Expect(got.Versions).To(HaveLen(keys))
 			reads++
@@ -115,14 +158,7 @@ var _ = Describe("SaveSummary", func() {
 	Describe("GetSummaries streaming", func() {
 		var dir string
 
-		write := func(rel string, s Summary) {
-			GinkgoHelper()
-			p := filepath.Join(dir, consts.SummariesDir, rel)
-			Expect(os.MkdirAll(filepath.Dir(p), consts.DirPermissions)).To(Succeed())
-			b, err := json.Marshal(s)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(os.WriteFile(p, b, consts.FilePermissions)).To(Succeed())
-		}
+		write := func(rel string, s Summary) { writeSummaryFile(dir, rel, s) }
 
 		collect := func() []SummaryRecord {
 			GinkgoHelper()
@@ -207,6 +243,37 @@ var _ = Describe("SaveSummary", func() {
 				n++
 			}
 			Expect(n).To(Equal(0))
+		})
+
+		It("reads a gzipped summary", func() {
+			write("2026/01/summary-2026-01-01.json.gz", Summary{NumInstances: 42})
+
+			summaries := collect()
+
+			Expect(summaries).To(HaveLen(1))
+			Expect(summaries[0].Time.Format(consts.DateFormat)).To(Equal("2026-01-01"))
+			Expect(summaries[0].Data.NumInstances).To(Equal(int64(42)))
+		})
+
+		It("loads a day once when both the plain and the gzipped file exist", func() {
+			// What the migration leaves behind if it is interrupted between writing the .gz and
+			// removing the .json. Counting the day twice would double it in every chart.
+			write("2026/01/summary-2026-01-01.json", Summary{NumInstances: 1})
+			write("2026/01/summary-2026-01-01.json.gz", Summary{NumInstances: 2})
+
+			summaries := collect()
+
+			Expect(summaries).To(HaveLen(1))
+			Expect(summaries[0].Data.NumInstances).To(Equal(int64(2)), "the gzipped file is the one that counts")
+		})
+
+		It("skips a gzipped file with corrupt compressed data and keeps going", func() {
+			write("2026/01/summary-2026-01-01.json.gz", Summary{NumInstances: 1})
+			bad := filepath.Join(dir, consts.SummariesDir, "2026/01/summary-2026-01-02.json.gz")
+			Expect(os.WriteFile(bad, []byte("not gzip at all"), 0o600)).To(Succeed())
+			write("2026/01/summary-2026-01-03.json.gz", Summary{NumInstances: 3})
+
+			Expect(collect()).To(HaveLen(2))
 		})
 
 		It("skips a malformed file and keeps going", func() {

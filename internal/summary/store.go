@@ -1,7 +1,11 @@
 package summary
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"fmt"
+	"io"
 	"io/fs"
 	"iter"
 	"log"
@@ -9,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/navidrome/insights/internal/consts"
@@ -20,13 +25,17 @@ type SummaryRecord struct {
 	Data Summary
 }
 
+// gzipExt is the suffix that marks a compressed summary. Files without it are the plain-JSON
+// form written before compression, still on disk until the migration converts them.
+const gzipExt = ".gz"
+
 func SummaryFilePath(dataFolder string, t time.Time) string {
 	return filepath.Join(
 		dataFolder,
 		consts.SummariesDir,
 		t.Format("2006"),
 		t.Format("01"),
-		"summary-"+t.Format(consts.DateFormat)+".json",
+		"summary-"+t.Format(consts.DateFormat)+".json"+gzipExt,
 	)
 }
 
@@ -39,22 +48,35 @@ func SaveSummary(dataFolder string, summary Summary, t time.Time) error {
 		return err
 	}
 
-	// Marshal summary to JSON
+	// Marshal summary to JSON. Still indented: gzip absorbs the whitespace almost entirely, and
+	// it keeps the file readable through zcat.
 	data, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {
 		return err
 	}
 
+	// Compress in memory, so what reaches the disk is one finished gzip stream. A day is about
+	// 160 KB of JSON, roughly a quarter of that once compressed.
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(data); err != nil {
+		return err
+	}
+	// Close, not Flush: it writes the gzip footer, without which the file cannot be read back.
+	if err := gz.Close(); err != nil {
+		return err
+	}
+
 	// Atomic: GetSummaries runs concurrently and would log a half-written file as malformed,
 	// dropping that day from the charts.
-	return fsutil.WriteFileAtomic(filePath, data, consts.FilePermissions)
+	return fsutil.WriteFileAtomic(filePath, buf.Bytes(), consts.FilePermissions)
 }
 
 // summaryPathRegex matches the layout SummaryFilePath writes, relative to the summaries
 // directory. Matching the whole relative path rather than just the file name keeps a copy nested
 // deeper out of the charts: production grew a summaries/2026/04/bkp/ directory of hand-made
 // backups, and a name-only match loaded each of those days twice.
-var summaryPathRegex = regexp.MustCompile(`^\d{4}/\d{2}/summary-(\d{4}-\d{2}-\d{2})\.json$`)
+var summaryPathRegex = regexp.MustCompile(`^\d{4}/\d{2}/summary-(\d{4}-\d{2}-\d{2})\.json(\.gz)?$`)
 
 // GetSummaries yields one day at a time, oldest first. Ranging over the returned sequence again
 // re-reads the files, which is what lets a caller make several passes without ever holding more
@@ -71,14 +93,9 @@ func GetSummaries(dataFolder string) (iter.Seq[SummaryRecord], error) {
 
 	seq := func(yield func(SummaryRecord) bool) {
 		for _, f := range files {
-			data, err := os.ReadFile(f.path) //#nosec G304 -- the path comes from a walk of a controlled directory
+			s, err := readSummaryFile(f.path)
 			if err != nil {
-				log.Printf("Warning: skipping unreadable file %s: %v", f.path, err)
-				continue
-			}
-			var s Summary
-			if err := json.Unmarshal(data, &s); err != nil {
-				log.Printf("Warning: skipping malformed file %s: %v", f.path, err)
+				log.Printf("Warning: skipping file %s: %v", f.path, err)
 				continue
 			}
 			// A day nobody reported on carries no signal, and an empty series point would draw
@@ -94,6 +111,33 @@ func GetSummaries(dataFolder string) (iter.Seq[SummaryRecord], error) {
 	return seq, nil
 }
 
+// readSummaryFile decodes one summary file, un-gzipping the .json.gz form on the way through.
+// The decode streams off the file rather than off a buffer holding all of it, so a day costs the
+// decoder's window and not the file's size.
+func readSummaryFile(path string) (Summary, error) {
+	f, err := os.Open(path) //#nosec G304 -- the path comes from a walk of a controlled directory
+	if err != nil {
+		return Summary{}, fmt.Errorf("opening: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var r io.Reader = f
+	if strings.HasSuffix(path, gzipExt) {
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return Summary{}, fmt.Errorf("decompressing: %w", err)
+		}
+		defer func() { _ = gz.Close() }()
+		r = gz
+	}
+
+	var s Summary
+	if err := json.NewDecoder(r).Decode(&s); err != nil {
+		return Summary{}, fmt.Errorf("decoding: %w", err)
+	}
+	return s, nil
+}
+
 // datedPath pairs a summary file with the date in its name. Holding the two together rather than
 // in separate slices indexed in step means a later filter or reorder cannot silently pair a date
 // with another day's file.
@@ -102,7 +146,14 @@ type datedPath struct {
 	path string
 }
 
-// summaryPaths returns every summary file under baseDir with its date, sorted oldest first.
+// compressed reports whether this is the .gz form. The suffix is the only thing that says so,
+// and readSummaryFile keys off the same suffix.
+func (d datedPath) compressed() bool { return strings.HasSuffix(d.path, gzipExt) }
+
+// summaryPaths returns one entry per day under baseDir, sorted oldest first. A day present in
+// both forms — a plain file prod/compress-summaries.sh has not converted yet, or one it was
+// interrupted before unlinking — collapses to the compressed file. Collapsing here rather than in
+// each caller is what stops a day being counted twice in every chart.
 //
 // The paths are collected up front, and only the paths: 555 of them is about 40 KB, against the
 // 28 MB of file contents that streaming keeps out of memory. The explicit sort matters because
@@ -146,6 +197,19 @@ func summaryPaths(baseDir string) ([]datedPath, error) {
 		return nil, err
 	}
 
-	slices.SortFunc(entries, func(a, b datedPath) int { return a.date.Compare(b.date) })
-	return entries, nil
+	slices.SortStableFunc(entries, func(a, b datedPath) int { return a.date.Compare(b.date) })
+
+	// Collapse each day to one entry, the compressed copy winning: it is the one the converter
+	// wrote last, and the plain file beside it is what it had not unlinked yet.
+	days := entries[:0]
+	for _, e := range entries {
+		last := len(days) - 1
+		switch {
+		case last < 0 || !days[last].date.Equal(e.date):
+			days = append(days, e)
+		case e.compressed():
+			days[last] = e
+		}
+	}
+	return days, nil
 }

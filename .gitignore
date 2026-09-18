@@ -11,3 +11,4 @@ web/chartdata/*
 /reports/
 /summaries/
 /binary/
+.playwright-mcp

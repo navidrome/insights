@@ -5,7 +5,9 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/navidrome/insights/internal/consts"
@@ -73,6 +75,75 @@ var _ = Describe("loadChartInput", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(in.Series).To(HaveLen(1))
 		Expect(in.Series[0].TotalPlayers).To(Equal(uint64(12)))
+	})
+
+	Describe("player exclusions", func() {
+		writeExclusions := func(content string) {
+			GinkgoHelper()
+			path := filepath.Join(dir, consts.PlayerExclusionsFile)
+			Expect(os.WriteFile(path, []byte(content), consts.FilePermissions)).To(Succeed())
+		}
+
+		BeforeEach(func() {
+			write(0, summary.Summary{
+				NumInstances: 100,
+				Versions:     map[string]uint64{"v": 1},
+				PlayerTypes:  map[string]uint64{"tms-web": 3, "tms-web-stats": 500, "Symfonium": 40},
+			})
+		})
+
+		It("removes matching players from the totals and the latest summary", func() {
+			writeExclusions("^tms-\n")
+
+			in, err := loadChartInput(dir)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(in.Series[0].TotalPlayers).To(Equal(uint64(40)))
+			Expect(in.Latest.PlayerTypes).To(Equal(map[string]uint64{"Symfonium": 40}))
+		})
+
+		It("ignores comments and blank lines", func() {
+			writeExclusions("# one private web app\n\n   \n  ^tms-web-stats$  \n")
+
+			in, err := loadChartInput(dir)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(in.Latest.PlayerTypes).To(HaveKey("tms-web"))
+			Expect(in.Latest.PlayerTypes).ToNot(HaveKey("tms-web-stats"))
+		})
+
+		It("skips an invalid pattern and still applies the others", func() {
+			writeExclusions("[unclosed\n^tms-\n")
+
+			in, err := loadChartInput(dir)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(in.Latest.PlayerTypes).To(Equal(map[string]uint64{"Symfonium": 40}))
+		})
+
+		It("logs what each rule removed from the latest day", func() {
+			writeExclusions("^tms-\n^no-such-player$\n")
+
+			var buf bytes.Buffer
+			out, flags := log.Writer(), log.Flags()
+			log.SetOutput(&buf)
+			log.SetFlags(0)
+			defer func() {
+				log.SetOutput(out)
+				log.SetFlags(flags)
+			}()
+			_, err := loadChartInput(dir)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(buf.String()).To(ContainSubstring(
+				`Player exclusion "^tms-" removed 2 names, 503 of 543 players on 2026-01-01`))
+			Expect(buf.String()).To(ContainSubstring(
+				`Player exclusion "^no-such-player$" removed 0 names, 0 of 543 players on 2026-01-01`))
+		})
+
+		It("excludes nothing when the file is missing", func() {
+			in, err := loadChartInput(dir)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(in.Series[0].TotalPlayers).To(Equal(uint64(543)))
+			Expect(in.Latest.PlayerTypes).To(HaveLen(3))
+		})
 	})
 
 	It("keeps the full summary for the last day only", func() {

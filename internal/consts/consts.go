@@ -58,6 +58,11 @@ const (
 	SummariesDir   = "summaries"
 	ReportsDir     = "reports"
 	ReportFileExt  = ".ndjson.gz"
+
+	// PlayerExclusionsFile lives in the data folder and lists, one regex per line, the
+	// normalized player names the charts leave out. Read on every chart build, so an edit
+	// takes effect without a deploy.
+	PlayerExclusionsFile = "player-exclusions.txt"
 )
 
 // File permissions

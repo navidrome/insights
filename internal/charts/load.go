@@ -127,7 +127,10 @@ func loadChartInput(dataFolder string) (chartInput, error) {
 		keep[v] = true
 	}
 
-	// Pass 3: the slim record per day, plus the one full summary.
+	// Pass 3: the slim record per day, plus the one full summary. Excluded players come out
+	// here, before anything reads PlayerTypes, so the daily totals and the latest snapshot
+	// agree, and a new rule also cleans every day already summarized.
+	excluded := loadPlayerExclusions(dataFolder)
 	in := chartInput{TopVersions: top, LatestTime: lastTime}
 	in.Series = make([]daySeries, 0, len(scan))
 	sawLatest := false
@@ -135,6 +138,10 @@ func loadChartInput(dataFolder string) (chartInput, error) {
 		if r.Time.After(lastTime) {
 			break
 		}
+		if r.Time.Equal(lastTime) {
+			logExclusions(r.Data.PlayerTypes, excluded, lastTime)
+		}
+		dropExcludedPlayers(r.Data.PlayerTypes, excluded)
 		d := daySeries{
 			Time:     r.Time,
 			Versions: make(map[string]uint64, len(top)),

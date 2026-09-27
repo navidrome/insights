@@ -138,7 +138,8 @@ func loadChartInput(dataFolder string) (chartInput, error) {
 		if r.Time.After(lastTime) {
 			break
 		}
-		if r.Time.Equal(lastTime) {
+		isLatest := r.Time.Equal(lastTime)
+		if isLatest {
 			logExclusions(r.Data.PlayerTypes, excluded, lastTime)
 		}
 		dropExcludedPlayers(r.Data.PlayerTypes, excluded)
@@ -161,7 +162,7 @@ func loadChartInput(dataFolder string) (chartInput, error) {
 			}
 		}
 		in.Series = append(in.Series, d)
-		if r.Time.Equal(lastTime) {
+		if isLatest {
 			in.Latest = r.Data
 			sawLatest = true
 		}

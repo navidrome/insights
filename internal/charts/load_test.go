@@ -122,13 +122,8 @@ var _ = Describe("loadChartInput", func() {
 			writeExclusions("^tms-\n^no-such-player$\n")
 
 			var buf bytes.Buffer
-			out, flags := log.Writer(), log.Flags()
 			log.SetOutput(&buf)
-			log.SetFlags(0)
-			defer func() {
-				log.SetOutput(out)
-				log.SetFlags(flags)
-			}()
+			defer log.SetOutput(os.Stderr)
 			_, err := loadChartInput(dir)
 			Expect(err).ToNot(HaveOccurred())
 

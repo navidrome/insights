@@ -37,6 +37,26 @@ It is safe to interrupt and safe to repeat, it converts each day through a tempo
 it reads back before unlinking the original, and it leaves the hand-made copies under
 `summaries/YYYY/MM/bkp/` alone.
 
+`player-exclusions.txt` in the deploy directory is optional. It lists player names to leave
+out of the charts, one regex per line; blank lines and lines starting with `#` are skipped.
+Patterns match the names as the charts show them, after normalization. The file is read on
+every chart export, so an edit needs no restart and no deploy, and it applies to every day
+already summarized, not only new ones. It takes effect at the next export (00:05 UTC). A
+pattern that does not compile is logged and skipped. The file has to be readable by UID 1000.
+
+Each export logs one line per rule, so check `docker compose logs process` after an edit:
+
+```text
+Player exclusion "^tms(-|$)" removed 4 names, 1278 of 266370 players on 2026-09-26
+```
+
+A rule removing most of the players, or none, is a typo.
+
+```text
+# One private web app on a single instance, one player per user
+^tms(-|$)
+```
+
 Reports are gzipped NDJSON under `reports/YYYY/MM/reports-YYYY-MM-DD.NNN.ndjson.gz`, one
 segment per writer session. Retention follows free space rather than age: the purge
 deletes whole days, oldest first, only when the volume has less than 500 MiB free, and

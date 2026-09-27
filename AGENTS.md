@@ -73,6 +73,11 @@ var playersTypes = map[*regexp.Regexp]string{
 }
 ```
 
+A discard here only affects summaries written from now on. To hide a player from the charts,
+including days already summarized, add a regex to `$DATA_FOLDER/player-exclusions.txt`
+instead (`internal/charts/exclusions.go`). It is read on every chart export and matches the
+normalized name.
+
 ### Binning (`mapToBins`)
 
 Numeric values grouped into predefined bins: `var TrackBins = []int64{0, 1, 100, 500, ...}`

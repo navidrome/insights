@@ -16,7 +16,8 @@ import (
 
 // loadPlayerExclusions reads the player exclusion patterns from the data folder: one regex per
 // line, matched against the normalized player names the summaries store. Blank lines and lines
-// starting with # are skipped.
+// starting with # are skipped. The rules reach PlayerTypes and the daily totals built from it;
+// the players-per-instance bins are counted at summarize time and stay as they are.
 //
 // Nothing here is fatal. A missing file means no exclusions, and an unreadable file or a bad
 // pattern is logged and skipped: a typo in a hand-edited file should not stop the charts.
@@ -77,6 +78,9 @@ func logExclusions(players map[string]uint64, rules []*regexp.Regexp, day time.T
 
 // dropExcludedPlayers deletes from players every name that matches one of the rules.
 func dropExcludedPlayers(players map[string]uint64, rules []*regexp.Regexp) {
+	if len(rules) == 0 {
+		return
+	}
 	for name := range players {
 		for _, r := range rules {
 			if r.MatchString(name) {

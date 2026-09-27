@@ -52,17 +52,13 @@ const (
 
 // File paths and directories
 const (
-	ChartDataDir   = "web/chartdata"
-	WebIndexPath   = "web/index.html"
-	ChartsJSONFile = "charts.json"
-	SummariesDir   = "summaries"
-	ReportsDir     = "reports"
-	ReportFileExt  = ".ndjson.gz"
-
-	// PlayerExclusionsFile lives in the data folder and lists, one regex per line, the
-	// normalized player names the charts leave out. Read on every chart build, so an edit
-	// takes effect without a deploy.
-	PlayerExclusionsFile = "player-exclusions.txt"
+	ChartDataDir         = "web/chartdata"
+	WebIndexPath         = "web/index.html"
+	ChartsJSONFile       = "charts.json"
+	SummariesDir         = "summaries"
+	ReportsDir           = "reports"
+	ReportFileExt        = ".ndjson.gz"
+	PlayerExclusionsFile = "player-exclusions.txt" // in the data folder; see charts.loadPlayerExclusions
 )
 
 // File permissions

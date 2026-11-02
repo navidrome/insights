@@ -87,9 +87,12 @@ Numeric values grouped into predefined bins: `var TrackBins = []int64{0, 1, 100,
 `store.ReadDay()` returns `iter.Seq[store.Record]` and `store.LastPerID()` returns
 `iter.Seq[insights.Data]` for memory-efficient processing — nothing loads a day into memory.
 
-### Incomplete Data Detection (`charts.ExcludeIncompleteDays`)
+### Closed-Day Filtering (`charts.loadChartInput`)
 
-Removes trailing days where instance count drops >20% (indicates incomplete collection).
+Charts use every past UTC day with data, however low its count. The current UTC day is left out
+until it closes at 00:00 UTC, and days with zero instances are left out by `summary.GetSummaries`.
+An outage therefore shows as a dip on the day it happened, and the five snapshot charts and
+`totalInstances` read that day's numbers until the next day closes.
 
 ## Testing
 

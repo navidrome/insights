@@ -79,7 +79,6 @@ const (
 	ChartHeight          = "500px"
 	TopVersionsCount     = 15
 	VersionSelectionDays = 60    // Rolling window (in days) for top-N version selection
-	IncompleteThreshold  = 0.8   // 20% drop indicates incomplete data
 	PlayerGroupThreshold = 0.002 // 0.2% threshold for grouping players
 )
 

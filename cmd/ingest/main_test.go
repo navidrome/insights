@@ -300,7 +300,10 @@ func TestRunForceClosesConnectionsOnTheShutdownDeadline(t *testing.T) {
 	}
 
 	select {
-	case <-readErr:
+	case err := <-readErr:
+		if err == nil {
+			t.Fatal("the stalled body read succeeded, want it cut off when the handler is released")
+		}
 	case <-time.After(time.Second):
 		t.Fatal("the stalled handler was never released")
 	}
@@ -388,7 +391,10 @@ func TestRunCutsOffARequestThatNeverFinishes(t *testing.T) {
 
 	cancel()
 	select {
-	case <-runErr:
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("run did not return")
 	}

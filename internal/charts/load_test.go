@@ -153,20 +153,138 @@ var _ = Describe("loadChartInput", func() {
 		Expect(in.Latest.OS).To(Equal(map[string]uint64{"new": 2}))
 	})
 
-	It("treats the last complete day as latest when the tail is incomplete", func() {
-		write(0, summary.Summary{NumInstances: 1000, Versions: map[string]uint64{"v": 1},
-			OS: map[string]uint64{"good": 1}, PlayerTypes: map[string]uint64{"a": 1}})
-		write(1, summary.Summary{NumInstances: 1000, Versions: map[string]uint64{"v": 1},
-			OS: map[string]uint64{"good": 2}, PlayerTypes: map[string]uint64{"a": 1}})
-		// A 90% drop, well under consts.IncompleteThreshold.
-		write(2, summary.Summary{NumInstances: 100, Versions: map[string]uint64{"v": 1},
-			OS: map[string]uint64{"partial": 1}, PlayerTypes: map[string]uint64{"a": 1}})
+	Describe("closed days", func() {
+		instances := func(n int64) summary.Summary {
+			return summary.Summary{NumInstances: n, Versions: map[string]uint64{"v": 1},
+				PlayerTypes: map[string]uint64{"a": 1}}
+		}
+		seriesDays := func(in chartInput) []time.Time {
+			days := make([]time.Time, len(in.Series))
+			for i, d := range in.Series {
+				days[i] = d.Time
+			}
+			return days
+		}
 
-		in, err := loadChartInput(dir)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(in.Series).To(HaveLen(2))
-		Expect(in.LatestTime).To(Equal(day(1)))
-		Expect(in.Latest.OS).To(Equal(map[string]uint64{"good": 2}))
+		// The counts from the 2026-11-01 outage: a 4-hour gap left a closed day at 79.6% of the
+		// day before, and the export that ran right after it hid that day from the site.
+		It("keeps a past day after an outage cut its instance count", func() {
+			oct31 := time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
+			nov1 := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+			nov2 := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+			Expect(summary.SaveSummary(dir, instances(164246), oct31)).To(Succeed())
+			Expect(summary.SaveSummary(dir, instances(130752), nov1)).To(Succeed())
+			Expect(summary.SaveSummary(dir, instances(92), nov2)).To(Succeed())
+
+			in, err := loadChartInputAt(dir, nov2.Add(5*time.Minute))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(seriesDays(in)).To(Equal([]time.Time{oct31, nov1}))
+			Expect(in.LatestTime).To(Equal(nov1))
+			Expect(in.Latest.NumInstances).To(Equal(int64(130752)))
+		})
+
+		It("keeps every past low day, not only the first", func() {
+			write(0, instances(1000))
+			write(1, instances(100))
+			write(2, instances(5))
+
+			in, err := loadChartInputAt(dir, day(3))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(seriesDays(in)).To(Equal([]time.Time{day(0), day(1), day(2)}))
+			Expect(in.Latest.NumInstances).To(Equal(int64(5)))
+		})
+
+		// Summary files are named by UTC date, so a day closes at 00:00 UTC whatever zone the
+		// clock reading arrives in. Both zoned entries fall on a different calendar date locally
+		// than in UTC, so an implementation that reads the local date gets them backwards.
+		DescribeTable("closes a day at 00:00 UTC",
+			func(now time.Time, want []time.Time) {
+				write(0, instances(100))
+				write(1, instances(100))
+				write(2, instances(100))
+
+				in, err := loadChartInputAt(dir, now)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(seriesDays(in)).To(Equal(want))
+				Expect(in.LatestTime).To(Equal(want[len(want)-1]))
+			},
+			Entry("one second before midnight, day 2 is open",
+				day(3).Add(-time.Second), []time.Time{day(0), day(1)}),
+			Entry("at midnight, day 2 is closed",
+				day(3), []time.Time{day(0), day(1), day(2)}),
+			Entry("already the next date at UTC+5, day 2 is still open in UTC",
+				day(3).Add(-time.Second).In(time.FixedZone("east", 5*60*60)), []time.Time{day(0), day(1)}),
+			Entry("still the same date at UTC-5, day 2 is already closed in UTC",
+				day(3).In(time.FixedZone("west", -5*60*60)), []time.Time{day(0), day(1), day(2)}),
+		)
+
+		It("omits a day dated after the current one", func() {
+			write(0, instances(100))
+			write(5, instances(100))
+
+			in, err := loadChartInputAt(dir, day(3))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(seriesDays(in)).To(Equal([]time.Time{day(0)}))
+		})
+
+		It("leaves the current day out of the top versions", func() {
+			write(0, summary.Summary{NumInstances: 100, PlayerTypes: map[string]uint64{"a": 1},
+				Versions: map[string]uint64{"closed": 1}})
+			write(1, summary.Summary{NumInstances: 100, PlayerTypes: map[string]uint64{"a": 1},
+				Versions: map[string]uint64{"open": 1000}})
+
+			in, err := loadChartInputAt(dir, day(1))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(in.TopVersions).To(Equal([]string{"closed"}))
+		})
+
+		It("has nothing to chart when only the current day has data", func() {
+			write(0, instances(100))
+
+			in, err := loadChartInputAt(dir, day(0).Add(time.Hour))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(in.Series).To(BeEmpty())
+		})
+
+		It("omits zero-data days without ending the series at one", func() {
+			write(0, instances(100))
+			write(1, instances(0))
+			write(2, instances(100))
+			write(3, instances(0))
+
+			in, err := loadChartInputAt(dir, day(4))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(seriesDays(in)).To(Equal([]time.Time{day(0), day(2)}))
+			Expect(in.LatestTime).To(Equal(day(2)))
+			Expect(in.Latest.NumInstances).To(Equal(int64(100)))
+		})
+
+		// Tomorrow, not today: this reads the real clock, and tomorrow stays open across the
+		// midnight that could fall between writing the fixture and reading it.
+		It("reads the real clock when no time is given", func() {
+			tomorrow := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
+			write(0, instances(100))
+			Expect(summary.SaveSummary(dir, instances(100), tomorrow)).To(Succeed())
+
+			in, err := loadChartInput(dir)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(seriesDays(in)).To(Equal([]time.Time{day(0)}))
+		})
+
+		It("publishes the low day's count in charts.json", func() {
+			write(0, instances(1000))
+			write(1, instances(100))
+
+			Expect(ExportChartsJSON(dir)).To(Succeed())
+
+			raw, err := os.ReadFile(filepath.Join(dir, consts.ChartDataDir, consts.ChartsJSONFile)) //#nosec G304 -- under the spec's temp dir
+			Expect(err).ToNot(HaveOccurred())
+			var published struct {
+				TotalInstances int64 `json:"totalInstances"`
+			}
+			Expect(json.Unmarshal(raw, &published)).To(Succeed())
+			Expect(published.TotalInstances).To(Equal(int64(100)))
+		})
 	})
 
 	It("returns an empty input when there are no summaries", func() {
@@ -181,8 +299,8 @@ var _ = Describe("loadChartInput", func() {
 	// file before calling loadChartInput once corrupts it for every pass equally -- pass 1 would
 	// just never pick that day as lastTime in the first place, and the run stays self-consistent.
 	// The only way pass 1 and pass 3 can disagree is if the last day's file changes while
-	// loadChartInput is running, which is exactly what a concurrent writer (another save landing
-	// on today's file while an export or the chart handler reads it) can do in production.
+	// loadChartInput is running, which is exactly what a concurrent writer (the summarizer saving
+	// that day again while an export or the chart handler reads it) can do in production.
 	//
 	// So this test drives the race directly: a writer goroutine hammers the last day's file
 	// between valid and malformed content for as long as the test runs, concurrently with many

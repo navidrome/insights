@@ -152,8 +152,7 @@ var _ = Describe("Charts", func() {
 				Players:      map[string]uint64{"0": 10, "1": 50, "2": 30},
 				Tracks:       map[string]uint64{"0": 5, "1000": 40, "10000": 30},
 			}
-			// Insert 3 days of data; NumInstances is the same every day, so trimIncomplete's
-			// cliff check never fires and all three survive.
+			// Insert 3 days of data.
 			err := summary.SaveSummary(tempDir, s, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 			Expect(err).NotTo(HaveOccurred())
 			err = summary.SaveSummary(tempDir, s, time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))
@@ -456,9 +455,6 @@ var _ = Describe("Charts", func() {
 			// count, but because pass 2 never counts it at all. Before the fix, filtering
 			// Versions down to the top-N first and summing that emptied map made AllVersions
 			// read 0 for this day, inventing a rise from nothing on the public chart.
-			// NumInstances matches the recent day's: a big swing here would trip
-			// trimIncomplete's cliff detection on the two-entry scan and drop the recent day
-			// as an incomplete tail, which is a different behavior than the one under test.
 			Expect(summary.SaveSummary(tempDir, summary.Summary{
 				NumInstances: 100,
 				Versions:     map[string]uint64{"ancient": 1000},

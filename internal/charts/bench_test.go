@@ -18,7 +18,9 @@ import (
 // Useful for both benchmarks (heavy fixture with 5000 types) and tests (light fixture with ~300 types).
 func writeSyntheticSummaries(tb testing.TB, dir string, days, playerTypesPerDay int) {
 	tb.Helper()
-	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Far enough back that the longest fixture ends in the past: loadChartInput drops any day that
+	// has not closed yet, which would quietly shrink the measurement.
+	start := time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < days; i++ {
 		day := start.AddDate(0, 0, i)
 		s := summary.Summary{

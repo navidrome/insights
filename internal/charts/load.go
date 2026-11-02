@@ -60,15 +60,6 @@ type daySeries struct {
 	OtherVersions uint64            // AllVersions minus the top-N slice: what the tail contributed
 }
 
-// dayInstances is pass 1's scratch record: the two fields the incomplete-tail trim reads, and
-// nothing else. It is deliberately not a daySeries. Sharing that type would carry NumInstances
-// into the series the charts consume, where nothing reads it, and invite a later contributor to
-// wire something onto a field no pass fills with a value anyone checked.
-type dayInstances struct {
-	Time         time.Time
-	NumInstances int64
-}
-
 // chartInput is everything the charts need: a slim record per day, the selected version names,
 // and the one full summary the five snapshot charts read.
 type chartInput struct {
@@ -82,23 +73,36 @@ type chartInput struct {
 // takes on the order of a second, against an export that runs once a day, so three passes that
 // each do one thing beat two that need a ring buffer to explain.
 //
-// The order is forced: the version window is measured back from the last day that survives the
-// incomplete-tail trim, so pass 1 has to finish before pass 2 knows what to scan.
+// The order is forced: the version window is measured back from the last closed day, so pass 1
+// has to finish before pass 2 knows what to scan.
 func loadChartInput(dataFolder string) (chartInput, error) {
-	// Pass 1: which day is last, once the incomplete tail is gone.
+	return loadChartInputAt(dataFolder, time.Now())
+}
+
+// loadChartInputAt charts every day that closed before now. A day closes at 00:00 UTC, the
+// boundary the store and summary files use, and until then its count only reflects the part of
+// the day collected so far. A closed day is kept however low its count is: it is what really
+// happened, an outage included, and a later day cannot make it any more complete. Days nobody
+// reported on never get here, GetSummaries filters them out.
+func loadChartInputAt(dataFolder string, now time.Time) (chartInput, error) {
+	// Pass 1: which day is the last one closed. GetSummaries yields oldest first.
 	seq, err := summary.GetSummaries(dataFolder)
 	if err != nil {
 		return chartInput{}, err
 	}
-	var scan []dayInstances
+	today := now.UTC().Truncate(24 * time.Hour)
+	var lastTime time.Time
+	closedDays := 0
 	for r := range seq {
-		scan = append(scan, dayInstances{Time: r.Time, NumInstances: r.Data.NumInstances})
+		if !r.Time.Before(today) {
+			break
+		}
+		lastTime = r.Time
+		closedDays++
 	}
-	scan = trimIncomplete(scan)
-	if len(scan) == 0 {
+	if closedDays == 0 {
 		return chartInput{}, nil
 	}
-	lastTime := scan[len(scan)-1].Time
 
 	// Pass 2: the top versions over the rolling window ending on that day.
 	cutoff := lastTime.AddDate(0, 0, -consts.VersionSelectionDays)
@@ -132,7 +136,7 @@ func loadChartInput(dataFolder string) (chartInput, error) {
 	// agree, and a new rule also cleans every day already summarized.
 	excluded := loadPlayerExclusions(dataFolder)
 	in := chartInput{TopVersions: top, LatestTime: lastTime}
-	in.Series = make([]daySeries, 0, len(scan))
+	in.Series = make([]daySeries, 0, closedDays)
 	sawLatest := false
 	for r := range seq {
 		if r.Time.After(lastTime) {
@@ -187,25 +191,4 @@ func loadChartInput(dataFolder string) (chartInput, error) {
 		return chartInput{}, nil
 	}
 	return in, nil
-}
-
-// trimIncomplete drops trailing days whose instance count falls off a cliff. A day still being
-// collected reads as a collapse in installations, and plotting it makes the chart look like an
-// outage.
-func trimIncomplete(days []dayInstances) []dayInstances {
-	if len(days) == 0 {
-		return nil
-	}
-	for len(days) > 1 {
-		last := days[len(days)-1]
-		prev := days[len(days)-2]
-		if prev.NumInstances > 0 {
-			if float64(last.NumInstances)/float64(prev.NumInstances) < consts.IncompleteThreshold {
-				days = days[:len(days)-1]
-				continue
-			}
-		}
-		break
-	}
-	return days
 }
